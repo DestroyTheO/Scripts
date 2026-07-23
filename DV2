@@ -1801,11 +1801,45 @@ local WeaponScanInterval = 5
 
 local SecretWatch = {
 	Enabled = false,
-	ScanInterval = 20,
+	ScanInterval = 5,
+	EventScanDelay = 0.35,
 	LastScan = 0,
+	LastEventAt = 0,
+	Dirty = false,
+	EventScans = 0,
+	FallbackScans = 0,
+	CandidateCount = 0,
+	LastScanReason = "Baseline",
 	KnownMaximumCounts = {},
 	TotalCount = 0,
 	NewCount = 0,
+	CharacterConnections = {},
+	Triggered = false,
+	SignalChecks = 0,
+	LastSignalSource = "None",
+	LastSignalText = "None",
+	PendingSignalObjects = setmetatable({}, {
+		__mode = "k",
+	}),
+	ObservedSignalObjects = setmetatable({}, {
+		__mode = "k",
+	}),
+
+	ContainerNames = {
+		inventory = true,
+		items = true,
+		weapons = true,
+		storage = true,
+		equipment = true,
+		backpack = true,
+	},
+
+	RarityNames = {
+		rarity = true,
+		itemrarity = true,
+		quality = true,
+		tier = true,
+	},
 }
 -- The full descendant scan runs only when the target state is dirty.
 -- Enemy-folder, shard, health, and transparency events wake it.
@@ -1831,6 +1865,9 @@ RuntimeState = {
 	OrbFolderConnection = nil,
 	OrbWorkspaceConnection = nil,
 	OrbRewardsDeleted = 0,
+	OrbPendingDeletes = setmetatable({}, {
+		__mode = "k",
+	}),
 }
 
 -- Disconnect frame/input connections created by the previous v96+
@@ -1901,18 +1938,63 @@ function RuntimeState:DeleteOrbReward(
 )
 	if not Object
 		or not Object.Parent
-		or Object == self.OrbFolder then
+		or Object == self.OrbFolder
+		or self.OrbPendingDeletes[
+			Object
+		] then
 		return
 	end
 
-	local Deleted =
-		pcall(function()
-			Object:Destroy()
-		end)
+	self.OrbPendingDeletes[Object] =
+		true
 
-	if Deleted then
-		self.OrbRewardsDeleted += 1
+	-- ClientOrbRewards can be the only replicated evidence of a drop.
+	-- Give the detector a brief window to read late attributes/children,
+	-- then destroy the reward as requested.
+	local Delay =
+		SecretWatch.Enabled
+			and 0.4
+			or 0
+
+	if SecretWatch.Enabled
+		and type(
+			SecretWatch.ScheduleSignalInspection
+		) == "function" then
+		SecretWatch:
+			ScheduleSignalInspection(
+				Object,
+				"ClientOrbRewards",
+				0.05
+			)
 	end
+
+	task.delay(Delay, function()
+		if SecretWatch.Enabled
+			and type(
+				SecretWatch.InspectSignalObject
+			) == "function"
+			and Object.Parent then
+			SecretWatch:
+				InspectSignalObject(
+					Object,
+					"ClientOrbRewards"
+				)
+		end
+
+		local Deleted =
+			pcall(function()
+				if Object.Parent then
+					Object:Destroy()
+				end
+			end)
+
+		if Deleted then
+			self.OrbRewardsDeleted += 1
+		end
+
+		self.OrbPendingDeletes[Object] =
+			nil
+	end)
 end
 
 function RuntimeState:BindOrbRewardFolder(
@@ -1994,7 +2076,8 @@ function RuntimeState:StartOrbRewardCleaner()
 		)
 end
 
-RuntimeState:StartOrbRewardCleaner()
+-- Started after SecretWatch methods are installed so reward objects
+-- can be inspected before deletion.
 
 -- Restore the map once if an older script copy left it hidden.
 -- This version never removes, destroys, or reparents workspace.GameMaps.
@@ -5246,6 +5329,9 @@ local function MaintainRuntimeCaches(
 	PruneConnections(
 		WeaponState.Connections
 	)
+	PruneConnections(
+		RuntimeState.Connections
+	)
 
 	local CachedTarget =
 		TargetState.CachedTarget
@@ -7467,7 +7553,7 @@ end
 function SecretWatch:ReadItemRarity(
 	Item
 )
-	if not Item then
+	if not Item or not Item.Parent then
 		return nil
 	end
 
@@ -7475,8 +7561,11 @@ function SecretWatch:ReadItemRarity(
 		"Rarity",
 		"rarity",
 		"ItemRarity",
+		"itemRarity",
 		"Quality",
+		"quality",
 		"Tier",
+		"tier",
 	}) do
 		local Value =
 			Item:GetAttribute(
@@ -7490,63 +7579,94 @@ function SecretWatch:ReadItemRarity(
 		end
 	end
 
-	local RarityValue =
-		Item:FindFirstChild(
-			"Rarity",
-			true
-		)
-		or Item:FindFirstChild(
-			"ItemRarity",
-			true
-		)
-		or Item:FindFirstChild(
-			"Quality",
-			true
-		)
-		or Item:FindFirstChild(
-			"Tier",
-			true
+	local NormalizedName =
+		string.lower(
+			tostring(Item.Name)
+		):gsub(
+			"[%s_%-]",
+			""
 		)
 
-	if RarityValue
+	if self.RarityNames[
+		NormalizedName
+	]
 		and (
-			RarityValue:IsA(
-				"StringValue"
-			)
-			or RarityValue:IsA(
-				"IntValue"
-			)
-			or RarityValue:IsA(
-				"NumberValue"
-			)
+			Item:IsA("StringValue")
+			or Item:IsA("IntValue")
+			or Item:IsA("NumberValue")
 		) then
 		return self:NormalizeRarity(
-			RarityValue.Value
+			Item.Value
 		)
 	end
 
-	local Configuration =
-		Item:FindFirstChild(
-			"Configuration"
-		)
-		or Item:FindFirstChild(
-			"Config"
-		)
+	for _, Child in ipairs(
+		Item:GetChildren()
+	) do
+		local ChildName =
+			string.lower(
+				tostring(Child.Name)
+			):gsub(
+				"[%s_%-]",
+				""
+			)
 
-	if Configuration
-		and Configuration:IsA(
-			"ModuleScript"
+		if self.RarityNames[
+			ChildName
+		]
+			and (
+				Child:IsA("StringValue")
+				or Child:IsA("IntValue")
+				or Child:IsA("NumberValue")
+			) then
+			return self:NormalizeRarity(
+				Child.Value
+			)
+		end
+
+		if (
+			Child.Name == "Configuration"
+			or Child.Name == "Config"
+		)
+			and Child:IsA(
+				"ModuleScript"
+			) then
+			local Success, Data =
+				pcall(
+					require,
+					Child
+				)
+
+			if Success then
+				local Rarity =
+					self:
+						ReadRarityFromTable(
+							Data
+						)
+
+				if Rarity then
+					return Rarity
+				end
+			end
+		end
+	end
+
+	if Item:IsA("ModuleScript")
+		and (
+			Item.Name == "Configuration"
+			or Item.Name == "Config"
 		) then
 		local Success, Data =
 			pcall(
 				require,
-				Configuration
+				Item
 			)
 
 		if Success then
-			return self:ReadRarityFromTable(
-				Data
-			)
+			return self:
+				ReadRarityFromTable(
+					Data
+				)
 		end
 	end
 
@@ -7561,6 +7681,7 @@ function SecretWatch:GetInventoryContainers()
 		Container
 	)
 		if Container
+			and Container.Parent
 			and not Added[Container] then
 			Added[Container] = true
 			table.insert(
@@ -7581,48 +7702,292 @@ function SecretWatch:GetInventoryContainers()
 		GetCharacter()
 	)
 
-	for _, Name in ipairs({
-		"Inventory",
-		"Items",
-		"Weapons",
-	}) do
-		AddContainer(
-			LocalPlayer:
-				FindFirstChild(
-					Name
+	local PlayerGui =
+		LocalPlayer:
+			FindFirstChildOfClass(
+				"PlayerGui"
+			)
+
+	local PlayerScripts =
+		LocalPlayer:
+			FindFirstChild(
+				"PlayerScripts"
+			)
+
+	for _, Object in ipairs(
+		LocalPlayer:GetDescendants()
+	) do
+		local IsExcluded =
+			(
+				PlayerGui
+				and Object:IsDescendantOf(
+					PlayerGui
 				)
-		)
+			)
+			or (
+				PlayerScripts
+				and Object:IsDescendantOf(
+					PlayerScripts
+				)
+			)
+
+		if IsExcluded then
+			continue
+		end
+
+		local Name =
+			string.lower(
+				tostring(Object.Name)
+			):gsub(
+				"[%s_%-]",
+				""
+			)
+
+		if self.ContainerNames[
+			Name
+		] then
+			AddContainer(
+				Object
+			)
+		end
 	end
 
 	return Containers
+end
+
+function SecretWatch:ResolveTrackedRoot(
+	Object,
+	Container
+)
+	if not Object
+		or not Container then
+		return nil
+	end
+
+	if Object:IsA("Tool") then
+		return Object
+	end
+
+	local Current = Object
+	local NearestModel = nil
+
+	while Current
+		and Current ~= Container do
+		if Current:IsA("Tool") then
+			return Current
+		end
+
+		if not NearestModel
+			and Current:IsA("Model") then
+			NearestModel = Current
+		end
+
+		for _, AttributeName in ipairs({
+			"UUID",
+			"UID",
+			"UniqueId",
+			"UniqueID",
+			"ItemId",
+			"ItemID",
+			"Serial",
+			"Guid",
+		}) do
+			local Value =
+				Current:GetAttribute(
+					AttributeName
+				)
+
+			if Value ~= nil
+				and tostring(Value)
+					~= "" then
+				return Current
+			end
+		end
+
+		local Config =
+			Current:FindFirstChild(
+				"Configuration"
+			)
+			or Current:FindFirstChild(
+				"Config"
+			)
+
+		if Config
+			and Config:IsA(
+				"ModuleScript"
+			) then
+			return Current
+		end
+
+		Current = Current.Parent
+	end
+
+	if NearestModel then
+		return NearestModel
+	end
+
+	Current = Object
+
+	while Current
+		and Current ~= Container do
+		local Parent =
+			Current.Parent
+
+		if Parent == Container then
+			return Current
+		end
+
+		if Parent then
+			local ParentName =
+				string.lower(
+					tostring(
+						Parent.Name
+					)
+				):gsub(
+					"[%s_%-]",
+					""
+				)
+
+			if ParentName ~= "stats"
+				and ParentName ~= "metadata"
+				and ParentName ~= "data"
+				and ParentName ~= "configuration"
+				and ParentName ~= "config" then
+				return Parent
+			end
+		end
+
+		Current = Parent
+	end
+
+	return Object
+end
+
+function SecretWatch:IsRelevantInventoryObject(
+	Object
+)
+	if not Object then
+		return false
+	end
+
+	local Character =
+		GetCharacter()
+
+	if Character
+		and Object:IsDescendantOf(
+			Character
+		) then
+		return Object:IsA("Tool")
+			or Object:
+				FindFirstAncestorWhichIsA(
+					"Tool"
+				) ~= nil
+	end
+
+	local Backpack =
+		LocalPlayer:
+			FindFirstChildOfClass(
+				"Backpack"
+			)
+
+	if Backpack
+		and (
+			Object == Backpack
+			or Object:IsDescendantOf(
+				Backpack
+			)
+		) then
+		return true
+	end
+
+	local PlayerGui =
+		LocalPlayer:
+			FindFirstChildOfClass(
+				"PlayerGui"
+			)
+
+	if PlayerGui
+		and Object:IsDescendantOf(
+			PlayerGui
+		) then
+		return false
+	end
+
+	local PlayerScripts =
+		LocalPlayer:
+			FindFirstChild(
+				"PlayerScripts"
+			)
+
+	if PlayerScripts
+		and Object:IsDescendantOf(
+			PlayerScripts
+		) then
+		return false
+	end
+
+	local Current = Object
+
+	while Current
+		and Current ~= LocalPlayer do
+		local Name =
+			string.lower(
+				tostring(Current.Name)
+			):gsub(
+				"[%s_%-]",
+				""
+			)
+
+		if self.ContainerNames[
+			Name
+		] then
+			return true
+		end
+
+		Current = Current.Parent
+	end
+
+	return false
 end
 
 function SecretWatch:GetItemSignature(
 	Item
 )
 	local UniqueValue = nil
+	local Current = Item
 
-	for _, AttributeName in ipairs({
-		"UUID",
-		"UID",
-		"UniqueId",
-		"UniqueID",
-		"ItemId",
-		"ItemID",
-		"Serial",
-		"Guid",
-	}) do
-		local Value =
-			Item:GetAttribute(
-				AttributeName
-			)
+	while Current
+		and Current ~= LocalPlayer
+		and Current ~= Workspace do
+		for _, AttributeName in ipairs({
+			"UUID",
+			"UID",
+			"UniqueId",
+			"UniqueID",
+			"ItemId",
+			"ItemID",
+			"Serial",
+			"Guid",
+		}) do
+			local Value =
+				Current:GetAttribute(
+					AttributeName
+				)
 
-		if Value ~= nil
-			and tostring(Value) ~= "" then
-			UniqueValue =
-				tostring(Value)
+			if Value ~= nil
+				and tostring(Value)
+					~= "" then
+				UniqueValue =
+					tostring(Value)
+				break
+			end
+		end
+
+		if UniqueValue then
 			break
 		end
+
+		Current = Current.Parent
 	end
 
 	return tostring(
@@ -7643,43 +8008,88 @@ end
 function SecretWatch:BuildSnapshot()
 	local Counts = {}
 	local Names = {}
-	local SeenInstances = {}
+	local SeenRoots = {}
+	local SeenObjects = {}
 	local Total = 0
+	local CandidateCount = 0
 	local Character = GetCharacter()
 
 	for _, Container in ipairs(
 		self:GetInventoryContainers()
 	) do
-		for _, Item in ipairs(
+		local Objects =
+			Container:GetDescendants()
+
+		for _, Child in ipairs(
 			Container:GetChildren()
 		) do
-			if not SeenInstances[Item]
-				and (
-					Container ~= Character
-					or Item:IsA("Tool")
-				) then
-				SeenInstances[Item] = true
+			table.insert(
+				Objects,
+				Child
+			)
+		end
 
-				if self:ReadItemRarity(
-					Item
-				) == "SECRET" then
-					local Signature =
-						self:GetItemSignature(
-							Item
+		for _, Object in ipairs(
+			Objects
+		) do
+			if not SeenObjects[Object] then
+				SeenObjects[Object] = true
+
+				local Allowed =
+					Container ~= Character
+					or Object:IsA("Tool")
+					or Object:
+						FindFirstAncestorWhichIsA(
+							"Tool"
+						) ~= nil
+
+				if Allowed then
+					local Rarity =
+						self:ReadItemRarity(
+							Object
 						)
 
-					Counts[Signature] =
-						(Counts[Signature] or 0)
-						+ 1
+					if Rarity then
+						CandidateCount += 1
+					end
 
-					Names[Signature] =
-						Item.Name
+					if Rarity == "SECRET" then
+						local Root =
+							self:
+								ResolveTrackedRoot(
+									Object,
+									Container
+								)
+							or Object
 
-					Total += 1
+						if not SeenRoots[Root] then
+							SeenRoots[Root] =
+								true
+
+							local Signature =
+								self:
+									GetItemSignature(
+										Root
+									)
+
+							Counts[Signature] =
+								(Counts[Signature]
+									or 0)
+								+ 1
+
+							Names[Signature] =
+								Root.Name
+
+							Total += 1
+						end
+					end
 				end
 			end
 		end
 	end
+
+	self.CandidateCount =
+		CandidateCount
 
 	return Counts, Total, Names
 end
@@ -7721,6 +8131,26 @@ function SecretWatch:UpdateStatusBar()
 		.. "  •  New: "
 		.. tostring(
 			self.NewCount
+		)
+		.. "  •  Secret Scan: "
+		.. tostring(
+			self.LastScanReason
+		)
+		.. "  •  Candidates: "
+		.. tostring(
+			self.CandidateCount
+		)
+		.. "  •  Signal Checks: "
+		.. tostring(
+			self.SignalChecks
+		)
+		.. "  •  Signal Source: "
+		.. tostring(
+			self.LastSignalSource
+		)
+		.. "  •  Signal: "
+		.. tostring(
+			self.LastSignalText
 		)
 
 	if Text
@@ -7880,12 +8310,13 @@ function SecretWatch:Scan()
 				)
 			end
 
-			self.KnownMaximumCounts[
-				Signature
-			] = Count
 		end
 	end
 
+	-- Store the current snapshot, including decreases. A later increase
+	-- of the same item type is then recognized as a newly obtained item.
+	self.KnownMaximumCounts =
+		Counts
 	self.TotalCount = Total
 
 	if DetectedCount > 0 then
@@ -7903,21 +8334,530 @@ function SecretWatch:Scan()
 	end
 end
 
+function SecretWatch:ContainsSecretWord(
+	Value
+)
+	if Value == nil then
+		return false
+	end
+
+	local Text =
+		string.upper(
+			tostring(Value)
+		)
+
+	return Text:find(
+		"%f[%a]SECRET%f[%A]"
+	) ~= nil
+end
+
+function SecretWatch:IsRewardContext(
+	Object
+)
+	local Current = Object
+
+	while Current
+		and Current ~= LocalPlayer
+		and Current ~= Workspace do
+		local Name =
+			string.lower(
+				tostring(Current.Name)
+			)
+
+		if Name:find("reward", 1, true)
+			or Name:find("drop", 1, true)
+			or Name:find("loot", 1, true)
+			or Name:find("roll", 1, true)
+			or Name:find("summon", 1, true)
+			or Name:find("hatch", 1, true)
+			or Name:find("result", 1, true)
+			or Name:find("popup", 1, true)
+			or Name:find("notification", 1, true)
+			or Name:find("obtained", 1, true)
+			or Name:find("orb", 1, true) then
+			return true
+		end
+
+		Current = Current.Parent
+	end
+
+	return false
+end
+
+function SecretWatch:GetSignalText(
+	Object
+)
+	if not Object then
+		return nil
+	end
+
+	if Object:IsA("TextLabel")
+		or Object:IsA("TextButton")
+		or Object:IsA("TextBox") then
+		return Object.Text
+	end
+
+	if Object:IsA("StringValue") then
+		return Object.Value
+	end
+
+	return nil
+end
+
+function SecretWatch:TriggerSignal(
+	DisplayName,
+	Source,
+	Evidence
+)
+	if not self.Enabled
+		or self.Triggered then
+		return false
+	end
+
+	self.Triggered = true
+	self.LastSignalSource =
+		tostring(Source or "Unknown")
+	self.LastSignalText =
+		tostring(Evidence or DisplayName or "SECRET")
+	self.LastScanReason =
+		"Signal: "
+		.. self.LastSignalSource
+	self.NewCount += 1
+
+	self:StopEverything(
+		1,
+		{
+			tostring(
+				DisplayName
+					or "SECRET reward"
+			),
+		}
+	)
+
+	return true
+end
+
+function SecretWatch:InspectSignalObject(
+	Object,
+	Source
+)
+	if not self.Enabled
+		or self.Triggered
+		or not Object
+		or not Object.Parent then
+		return false
+	end
+
+	self.SignalChecks += 1
+
+	local IsOrbSource =
+		Source == "ClientOrbRewards"
+
+	local function InspectCandidate(
+		Candidate
+	)
+		if not Candidate
+			or not Candidate.Parent then
+			return false
+		end
+
+		local Rarity =
+			self:ReadItemRarity(
+				Candidate
+			)
+
+		if Rarity == "SECRET" then
+			return self:TriggerSignal(
+				Candidate.Name,
+				Source,
+				"Rarity=SECRET"
+			)
+		end
+
+		for AttributeName, Value in pairs(
+			Candidate:GetAttributes()
+		) do
+			local AttributeIsRarity =
+				self.RarityNames[
+					string.lower(
+						tostring(
+							AttributeName
+						)
+					):gsub(
+						"[%s_%-]",
+						""
+					)
+				] == true
+
+			if AttributeIsRarity
+				and self:ContainsSecretWord(
+					Value
+				) then
+				return self:TriggerSignal(
+					Candidate.Name,
+					Source,
+					tostring(AttributeName)
+						.. "="
+						.. tostring(Value)
+				)
+			end
+		end
+
+		local SignalText =
+			self:GetSignalText(
+				Candidate
+			)
+
+		if SignalText
+			and self:ContainsSecretWord(
+				SignalText
+			)
+			and (
+				IsOrbSource
+				or self:IsRewardContext(
+					Candidate
+				)
+			) then
+			return self:TriggerSignal(
+				Candidate.Name,
+				Source,
+				SignalText
+			)
+		end
+
+		if IsOrbSource
+			and self:ContainsSecretWord(
+				Candidate.Name
+			) then
+			return self:TriggerSignal(
+				Candidate.Name,
+				Source,
+				Candidate.Name
+			)
+		end
+
+		return false
+	end
+
+	if InspectCandidate(Object) then
+		return true
+	end
+
+	local Checked = 0
+
+	for _, Candidate in ipairs(
+		Object:GetDescendants()
+	) do
+		Checked += 1
+
+		if Checked > 500 then
+			break
+		end
+
+		if InspectCandidate(
+			Candidate
+		) then
+			return true
+		end
+	end
+
+	return false
+end
+
+function SecretWatch:ScheduleSignalInspection(
+	Object,
+	Source,
+	Delay
+)
+	if not self.Enabled
+		or self.Triggered
+		or not Object
+		or self.PendingSignalObjects[
+			Object
+		] then
+		return
+	end
+
+	self.PendingSignalObjects[Object] =
+		true
+
+	task.delay(
+		math.max(
+			0,
+			tonumber(Delay) or 0.2
+		),
+		function()
+			self.PendingSignalObjects[Object] =
+				nil
+
+			if self.Enabled
+				and not self.Triggered
+				and Object.Parent then
+				self:InspectSignalObject(
+					Object,
+					Source
+				)
+			end
+		end
+	)
+end
+
+function SecretWatch:ObserveSignalObject(
+	Object,
+	Source
+)
+	if not Object
+		or not Object.Parent
+		or self.ObservedSignalObjects[
+			Object
+		] then
+		return
+	end
+
+	local Connection = nil
+
+	if Object:IsA("TextLabel")
+		or Object:IsA("TextButton")
+		or Object:IsA("TextBox") then
+		Connection =
+			Object:GetPropertyChangedSignal(
+				"Text"
+			):Connect(function()
+				if self.Enabled then
+					self:ScheduleSignalInspection(
+						Object,
+						Source,
+						0.05
+					)
+				end
+			end)
+	elseif Object:IsA("StringValue")
+		or Object:IsA("IntValue")
+		or Object:IsA("NumberValue") then
+		Connection =
+			Object.Changed:Connect(
+				function()
+					if self.Enabled then
+						self:ScheduleSignalInspection(
+							Object,
+							Source,
+							0.05
+						)
+					end
+				end
+			)
+	end
+
+	if Connection then
+		self.ObservedSignalObjects[
+			Object
+		] = Connection
+		TrackRuntimeConnection(
+			Connection
+		)
+	end
+end
+
+function SecretWatch:BindExistingSignalWatchers()
+	local PlayerGui =
+		LocalPlayer:
+			FindFirstChildOfClass(
+				"PlayerGui"
+			)
+
+	if not PlayerGui then
+		return
+	end
+
+	for _, Object in ipairs(
+		PlayerGui:GetDescendants()
+	) do
+		if self:IsRewardContext(
+			Object
+		)
+			and (
+				Object:IsA("TextLabel")
+				or Object:IsA("TextButton")
+				or Object:IsA("TextBox")
+				or Object:IsA("StringValue")
+			) then
+			self:ObserveSignalObject(
+				Object,
+				"PlayerGui change"
+			)
+		end
+	end
+end
+
+function SecretWatch:MarkDirty(
+	Object
+)
+	if not self.Enabled
+		or self.Triggered
+		or not Object then
+		return
+	end
+
+	local PlayerGui =
+		LocalPlayer:
+			FindFirstChildOfClass(
+				"PlayerGui"
+			)
+
+	if PlayerGui
+		and Object:IsDescendantOf(
+			PlayerGui
+		)
+		and (
+			Object:IsA("TextLabel")
+			or Object:IsA("TextButton")
+			or Object:IsA("TextBox")
+			or Object:IsA("StringValue")
+		) then
+		self:ObserveSignalObject(
+			Object,
+			"PlayerGui change"
+		)
+		self:ScheduleSignalInspection(
+			Object,
+			"PlayerGui",
+			0.25
+		)
+	end
+
+	if not self:
+		IsRelevantInventoryObject(
+			Object
+		) then
+		return
+	end
+
+	self.Dirty = true
+	self.LastEventAt =
+		os.clock()
+	self:ScheduleSignalInspection(
+		Object,
+		"Inventory",
+		0.35
+	)
+end
+
+function SecretWatch:DisconnectCharacterWatchers()
+	for _, Connection in ipairs(
+		self.CharacterConnections
+	) do
+		pcall(function()
+			Connection:Disconnect()
+		end)
+	end
+
+	table.clear(
+		self.CharacterConnections
+	)
+end
+
+function SecretWatch:BindCharacterWatchers(
+	Character
+)
+	self:DisconnectCharacterWatchers()
+
+	if not Character then
+		return
+	end
+
+	table.insert(
+		self.CharacterConnections,
+		TrackRuntimeConnection(
+			Character.DescendantAdded:
+				Connect(function(Object)
+					self:MarkDirty(
+						Object
+					)
+				end)
+		)
+	)
+
+	table.insert(
+		self.CharacterConnections,
+		TrackRuntimeConnection(
+			Character.DescendantRemoving:
+				Connect(function(Object)
+					self:MarkDirty(
+						Object
+					)
+				end)
+		)
+	)
+end
+
+function SecretWatch:BindEventWatchers()
+	TrackRuntimeConnection(
+		LocalPlayer.DescendantAdded:
+			Connect(function(Object)
+				self:MarkDirty(
+					Object
+				)
+			end)
+	)
+
+	TrackRuntimeConnection(
+		LocalPlayer.DescendantRemoving:
+			Connect(function(Object)
+				self:MarkDirty(
+					Object
+				)
+			end)
+	)
+
+	TrackRuntimeConnection(
+		LocalPlayer.CharacterAdded:
+			Connect(function(Character)
+				self:
+					BindCharacterWatchers(
+						Character
+					)
+
+				if self.Enabled then
+					self.Dirty = true
+					self.LastEventAt =
+						os.clock()
+				end
+			end)
+	)
+
+	self:BindCharacterWatchers(
+		GetCharacter()
+	)
+end
+
 function SecretWatch:SetEnabled(State)
 	self.Enabled =
 		State == true
 
 	if self.Enabled then
+		self.Dirty = false
+		self.Triggered = false
+		self.LastEventAt = 0
+		self.EventScans = 0
+		self.FallbackScans = 0
+		self.SignalChecks = 0
+		self.LastSignalSource = "None"
+		self.LastSignalText = "None"
+		table.clear(
+			self.PendingSignalObjects
+		)
 		self:EstablishBaseline(true)
+		self:BindExistingSignalWatchers()
 
 		pcall(function()
 			Window:Success(
 				"Secret Detector",
-				"Enabled. Current SECRET items were baselined and will not trigger. Scanning every 20 seconds.",
+				"Enabled. Watching inventory and reward UI, with a five-second fallback scan.",
 				5
 			)
 		end)
 	else
+		self.Dirty = false
 		self:UpdateStatusBar()
 
 		pcall(function()
@@ -7930,20 +8870,62 @@ function SecretWatch:SetEnabled(State)
 	end
 end
 
+SecretWatch:BindEventWatchers()
 SecretWatch:EstablishBaseline(true)
+
+-- Delete workspace.ClientOrbRewards once on execution only.
+do
+	local ClientOrbRewardsFolder =
+		Workspace:FindFirstChild(
+			"ClientOrbRewards"
+		)
+
+	if ClientOrbRewardsFolder then
+		pcall(function()
+			ClientOrbRewardsFolder:Destroy()
+		end)
+	end
+end
 
 task.spawn(function()
 	while ScriptToken
 		== Environment.__CrimmyAutoEnemyController do
-		task.wait(1)
+		task.wait(0.2)
 
-		if SecretWatch.Enabled
-			and os.clock()
-				- SecretWatch.LastScan
-				>= SecretWatch.ScanInterval then
-			SecretWatch.LastScan =
+		if SecretWatch.Enabled then
+			local Now =
 				os.clock()
-			SecretWatch:Scan()
+
+			local EventScanDue =
+				SecretWatch.Dirty
+				and Now
+					- SecretWatch.LastEventAt
+					>= SecretWatch
+						.EventScanDelay
+
+			local FallbackScanDue =
+				Now - SecretWatch.LastScan
+					>= SecretWatch.ScanInterval
+
+			if EventScanDue
+				or FallbackScanDue then
+				SecretWatch.Dirty = false
+				SecretWatch.LastScan = Now
+
+				if EventScanDue then
+					SecretWatch.EventScans +=
+						1
+					SecretWatch.LastScanReason =
+						"Inventory event"
+				else
+					SecretWatch.FallbackScans +=
+						1
+					SecretWatch.LastScanReason =
+						"5s fallback"
+				end
+
+				SecretWatch:Scan()
+			end
 		end
 	end
 end)
@@ -9017,12 +9999,37 @@ MainTab:Section({
 
 UIState.SecretDetectorToggleControl = MainTab:Toggle({
 	name = "Secret Detector",
-	description = "Takes a baseline when enabled, then scans once every 20 seconds for newly obtained SECRET items.",
+	description = "Watches inventory and reward UI, plus a five-second SECRET fallback scan.",
 	default = false,
 
 	callback = function(State)
 		SecretWatch:SetEnabled(
 			State == true
+		)
+	end,
+})
+
+MainTab:Button({
+	name = "Test Secret Detector",
+	description = "Runs the real SECRET response path. This stops farming and resets your character.",
+	icon = Library.Icons.warning
+		or Library.Icons.alert
+		or Library.Icons.info,
+
+	callback = function()
+		if not SecretWatch.Enabled then
+			Window:Warning(
+				"Secret Detector",
+				"Enable the detector before running the test.",
+				4
+			)
+			return
+		end
+
+		SecretWatch:TriggerSignal(
+			"Manual detector test",
+			"Test button",
+			"Synthetic SECRET signal"
 		)
 	end,
 })
@@ -9915,6 +10922,8 @@ if type(Window.RegisterCleanup) == "function" then
 			end)
 
 			pcall(function()
+				SecretWatch:
+					DisconnectCharacterWatchers()
 				DisconnectWeaponInventoryWatchers()
 				StopMobScanning()
 				RestoreCollisions()
@@ -9927,4 +10936,4 @@ if type(Window.RegisterCleanup) == "function" then
 	)
 end
 
-print("[CrimmyScriptz] Enemy controller v108 loaded - RuntimeState scope fix and orb reward cleaner")
+print("[CrimmyScriptz] Enemy controller v111 loaded - delete ClientOrbRewards folder on execution")
