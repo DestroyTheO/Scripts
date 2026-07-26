@@ -1652,24 +1652,68 @@ local MinimumMobDistance = 1
 local MaximumMobDistance = 15
 
 local FollowMovement = {
+	-- Chronyx keeps the slower cinematic follow speed. Ordinary
+	-- enemies use a faster adaptive glide instead of repeated snapping.
 	Speed = 110,
-	SnapDistance = 0.35,
-	PivotSkipDistance = 0.15,
+	ChronyxSpeed = 110,
+	RegularSpeed = 360,
+	PositionResponse = 11,
+	RotationResponse = 15,
+
+	SnapDistance = 0.25,
+	PivotSkipDistance = 0.1,
 	PivotVerifyDistance = 1,
-	ForcedPivotFrames = 3,
+	HardTeleportDistance = 220,
+	InitialHardTeleportDistance = 120,
+	HardTeleportCooldown = 0.18,
+	FailureRetryCooldown = 0.25,
+	SafeCheckInterval = 0.18,
+	SafeCacheDistance = 2,
+
+	-- The destination is checked with a character-sized overlap box.
+	-- If blocked, the controller probes progressively higher positions.
+	SafeBoxSize = Vector3.new(4.5, 6.5, 4.5),
+	SafeProbeOffsets = {
+		0,
+		3,
+		6,
+		10,
+		15,
+		22,
+	},
+	MinimumVoidMargin = 20,
+	MaximumCoordinate = 1000000,
+	MaximumTargetAnchorDistance = 120,
+
+	ForcedPivotFrames = 1,
 	RemainingForcedPivots = 0,
 	LastPivotError = 0,
 	PivotFailures = 0,
 	PivotFallbacks = 0,
+	SmoothSteps = 0,
+	HardTeleports = 0,
+	SafeChecks = 0,
+	SafeAdjustments = 0,
+	RejectedDestinations = 0,
+	Rollbacks = 0,
+
 	LastTarget = nil,
 	LastCharacter = nil,
+	LastSafeCFrame = nil,
+	LastResolvedSafeCFrame = nil,
+	LastDesiredCFrame = nil,
+	LastSafeTarget = nil,
+	LastSafeCheckAt = 0,
+	LastHardTeleportAt = 0,
+	LastFailureAt = 0,
+	LastMode = "Idle",
+	LastSafetyReason = "None",
 	InitialTeleportPending = true,
 	SuperBossOnly = true,
 }
 
--- Use a direct character pivot when the target is far away.
--- Several repeated frames prevent the old waiting anchor or physics
--- ownership from cancelling the first teleport.
+-- Nearby targets use adaptive interpolation. Far targets and explicit
+-- combat recoveries use one verified teleport with rollback protection.
 
 -- Same Humanoid-state style used by the supplied working fly.
 local CharacterControl = {
@@ -1811,6 +1855,8 @@ local SecretWatch = {
 	CandidateCount = 0,
 	LastScanReason = "Baseline",
 	KnownMaximumCounts = {},
+	MissingSince = {},
+	CountDropGrace = 3,
 	TotalCount = 0,
 	NewCount = 0,
 	CharacterConnections = {},
@@ -5769,6 +5815,342 @@ local function GetTargetWorldPivotCFrame(
 end
 
 
+function FollowMovement:IsFiniteNumber(
+	Value
+)
+	return type(Value) == "number"
+		and Value == Value
+		and Value ~= math.huge
+		and Value ~= -math.huge
+end
+
+function FollowMovement:IsFiniteVector3(
+	Value
+)
+	return typeof(Value) == "Vector3"
+		and self:IsFiniteNumber(Value.X)
+		and self:IsFiniteNumber(Value.Y)
+		and self:IsFiniteNumber(Value.Z)
+end
+
+function FollowMovement:IsTargetLive(
+	TargetObject
+)
+	if typeof(TargetObject)
+			~= "Instance"
+		or not TargetObject.Parent then
+		return false
+	end
+
+	if TargetState.IsChronyxShard then
+		return IsChronyxShardValid(
+			TargetObject
+		)
+	end
+
+	return IsMobValid(
+		TargetObject
+	)
+end
+
+function FollowMovement:GetSafeDestination(
+	Character,
+	Root,
+	TargetObject,
+	DesiredCFrame
+)
+	if not Character
+		or not Root
+		or not Root.Parent
+		or typeof(DesiredCFrame)
+			~= "CFrame"
+		or not self:
+			IsFiniteVector3(
+				DesiredCFrame.Position
+			) then
+		self.RejectedDestinations += 1
+		self.LastResolvedSafeCFrame =
+			nil
+		self.LastSafetyReason =
+			"Invalid destination"
+		return nil
+	end
+
+	local Now =
+		os.clock()
+
+	local CanUseCachedSafety =
+		self.LastSafeTarget
+			== TargetObject
+		and self.LastResolvedSafeCFrame
+		and self.LastDesiredCFrame
+		and not TargetState
+			.EngagementForceTeleport
+		and Now - self.LastSafeCheckAt
+			< self.SafeCheckInterval
+		and (
+			DesiredCFrame.Position
+				- self.LastDesiredCFrame.Position
+		).Magnitude
+			<= self.SafeCacheDistance
+
+	if CanUseCachedSafety then
+		return self.LastResolvedSafeCFrame
+	end
+
+	self.SafeChecks += 1
+	self.LastSafeCheckAt = Now
+	self.LastSafeTarget =
+		TargetObject
+	self.LastDesiredCFrame =
+		DesiredCFrame
+
+	if TargetObject
+		and not self:
+			IsTargetLive(
+				TargetObject
+			) then
+		self.RejectedDestinations += 1
+		self.LastResolvedSafeCFrame =
+			nil
+		self.LastSafetyReason =
+			"Target became invalid"
+		return nil
+	end
+
+	local Position =
+		DesiredCFrame.Position
+
+	local FallenHeight =
+		tonumber(
+			Workspace.FallenPartsDestroyHeight
+		) or -500
+
+	if Position.Y
+		<= FallenHeight
+			+ self.MinimumVoidMargin
+		or math.abs(Position.X)
+			> self.MaximumCoordinate
+		or math.abs(Position.Y)
+			> self.MaximumCoordinate
+		or math.abs(Position.Z)
+			> self.MaximumCoordinate then
+		self.RejectedDestinations += 1
+		self.LastResolvedSafeCFrame =
+			nil
+		self.LastSafetyReason =
+			"Destination outside safe world bounds"
+		return nil
+	end
+
+	if TargetObject then
+		local Anchor =
+			FindTargetHitbox(
+				TargetObject,
+				false
+			)
+			or FindValidPart(
+				TargetObject
+			)
+
+		if Anchor
+			and Anchor.Parent
+			and (
+				Position
+					- Anchor.Position
+			).Magnitude
+				> self
+					.MaximumTargetAnchorDistance then
+			self.RejectedDestinations += 1
+			self.LastResolvedSafeCFrame =
+				nil
+			self.LastSafetyReason =
+				"Destination too far from target"
+			return nil
+		end
+	end
+
+	local Overlap =
+		OverlapParams.new()
+
+	Overlap.FilterType =
+		Enum.RaycastFilterType.Exclude
+	Overlap.FilterDescendantsInstances = {
+		Character,
+		TargetObject,
+	}
+	Overlap.MaxParts = 24
+
+	pcall(function()
+		Overlap.RespectCanCollide =
+			true
+	end)
+
+	local ProbeWorked =
+		false
+
+	for _, OffsetY in ipairs(
+		self.SafeProbeOffsets
+	) do
+		local Candidate =
+			DesiredCFrame
+			+ Vector3.new(
+				0,
+				OffsetY,
+				0
+			)
+
+		local Success, Parts =
+			pcall(function()
+				return Workspace:
+					GetPartBoundsInBox(
+						Candidate,
+						self.SafeBoxSize,
+						Overlap
+					)
+			end)
+
+		if not Success then
+			-- Some runtimes do not expose overlap queries correctly.
+			-- Keep the other safety checks and accept the destination.
+			self.LastSafetyReason =
+				"Overlap query unavailable"
+			self.LastResolvedSafeCFrame =
+				DesiredCFrame
+			return DesiredCFrame
+		end
+
+		ProbeWorked = true
+
+		local Blocked = false
+
+		for _, Part in ipairs(
+			Parts
+		) do
+			if Part
+				and Part.Parent
+				and Part.CanCollide
+				and Part.Transparency < 1 then
+				Blocked = true
+				break
+			end
+		end
+
+		if not Blocked then
+			if OffsetY > 0 then
+				self.SafeAdjustments += 1
+				self.LastSafetyReason =
+					"Raised "
+					.. tostring(OffsetY)
+					.. " studs"
+			else
+				self.LastSafetyReason =
+					"Clear"
+			end
+
+			self.LastResolvedSafeCFrame =
+				Candidate
+			return Candidate
+		end
+	end
+
+	if ProbeWorked then
+		self.RejectedDestinations += 1
+		self.LastResolvedSafeCFrame =
+			nil
+		self.LastSafetyReason =
+			"Destination obstructed"
+	end
+
+	return nil
+end
+
+function FollowMovement:BuildSmoothCFrame(
+	CurrentCFrame,
+	TargetCFrame,
+	DeltaTime,
+	Speed
+)
+	local FrameTime =
+		math.clamp(
+			tonumber(DeltaTime) or 0,
+			1 / 240,
+			1 / 15
+		)
+
+	local Offset =
+		TargetCFrame.Position
+		- CurrentCFrame.Position
+
+	local Distance =
+		Offset.Magnitude
+
+	local PositionAlpha =
+		1 - math.exp(
+			-self.PositionResponse
+				* FrameTime
+		)
+
+	local MaximumStep =
+		math.max(
+			1,
+			tonumber(Speed)
+				or self.RegularSpeed
+		) * FrameTime
+
+	local StepDistance =
+		math.min(
+			Distance,
+			Distance * PositionAlpha,
+			MaximumStep
+		)
+
+	local NextPosition
+
+	if Distance
+		<= self.SnapDistance then
+		NextPosition =
+			TargetCFrame.Position
+	elseif Distance > 0 then
+		NextPosition =
+			CurrentCFrame.Position
+			+ Offset.Unit
+				* StepDistance
+	else
+		NextPosition =
+			CurrentCFrame.Position
+	end
+
+	local CurrentRotation =
+		CurrentCFrame
+		- CurrentCFrame.Position
+
+	local TargetRotation =
+		TargetCFrame
+		- TargetCFrame.Position
+
+	local RotationAlpha =
+		1 - math.exp(
+			-self.RotationResponse
+				* FrameTime
+		)
+
+	local NextRotation =
+		CurrentRotation:Lerp(
+			TargetRotation,
+			RotationAlpha
+		)
+
+	return CharacterControl:
+		MakeUprightCFrame(
+			CFrame.new(
+				NextPosition
+			) * NextRotation,
+			CurrentCFrame
+		)
+end
+
+
 local function ApplyVerifiedCharacterPivot(
 	Character,
 	Root,
@@ -5778,7 +6160,11 @@ local function ApplyVerifiedCharacterPivot(
 		or not Root
 		or not Root.Parent
 		or typeof(TargetCFrame)
-			~= "CFrame" then
+			~= "CFrame"
+		or not FollowMovement:
+			IsFiniteVector3(
+				TargetCFrame.Position
+			) then
 		return false
 	end
 
@@ -5791,6 +6177,10 @@ local function ApplyVerifiedCharacterPivot(
 
 	local CurrentPivot =
 		Character:GetPivot()
+
+	local RollbackCFrame =
+		FollowMovement.LastSafeCFrame
+		or CurrentPivot
 
 	-- Preserve the exact Root-to-model-pivot relationship for the
 	-- fallback. Assigning Root.CFrame directly to TargetCFrame can
@@ -5849,6 +6239,8 @@ local function ApplyVerifiedCharacterPivot(
 
 		if not FallbackWorked then
 			FollowMovement.PivotFailures += 1
+			FollowMovement.LastFailureAt =
+				os.clock()
 			return false
 		end
 
@@ -5863,12 +6255,49 @@ local function ApplyVerifiedCharacterPivot(
 
 		FollowMovement.LastPivotError =
 			PivotError
+	end
 
-		if PivotError
-			> FollowMovement.PivotVerifyDistance then
-			FollowMovement.PivotFailures += 1
-			return false
-		end
+	local ResultPosition =
+		ResultPivot.Position
+
+	local FallenHeight =
+		tonumber(
+			Workspace.FallenPartsDestroyHeight
+		) or -500
+
+	local ResultIsSafe =
+		FollowMovement:
+			IsFiniteVector3(
+				ResultPosition
+			)
+		and ResultPosition.Y
+			> FallenHeight
+				+ FollowMovement
+					.MinimumVoidMargin
+		and PivotError
+			<= FollowMovement
+				.PivotVerifyDistance
+
+	if not ResultIsSafe then
+		FollowMovement.PivotFailures += 1
+		FollowMovement.Rollbacks += 1
+		FollowMovement.LastFailureAt =
+			os.clock()
+		FollowMovement.LastSafetyReason =
+			"Move verification failed"
+
+		pcall(function()
+			Character:PivotTo(
+				RollbackCFrame
+			)
+		end)
+
+		Root.AssemblyLinearVelocity =
+			Vector3.zero
+		Root.AssemblyAngularVelocity =
+			Vector3.zero
+
+		return false
 	end
 
 	Root.AssemblyLinearVelocity =
@@ -5880,6 +6309,10 @@ local function ApplyVerifiedCharacterPivot(
 		KeepUpright(
 			Root
 		)
+
+	FollowMovement.LastSafeCFrame =
+		Character:GetPivot()
+	FollowMovement.LastFailureAt = 0
 
 	return true
 end
@@ -5896,11 +6329,27 @@ local function MoveCharacterLikeFly(
 		return false
 	end
 
-	local Character = GetCharacter()
+	local Character =
+		GetCharacter()
 
 	if not Character
-		or Character ~= Root.Parent then
+		or Character ~= Root.Parent
+		or not FollowMovement:
+			IsTargetLive(
+				TargetObject
+			) then
 		return false
+	end
+
+	if os.clock()
+		- FollowMovement.LastFailureAt
+		< FollowMovement
+			.FailureRetryCooldown then
+		TargetState.EngagementCanClick =
+			false
+		TargetState.EngagementStatus =
+			"Movement safety cooldown"
+		return true
 	end
 
 	if not CacheTargetRuntime(
@@ -5910,18 +6359,39 @@ local function MoveCharacterLikeFly(
 		return false
 	end
 
-	local TargetCFrame =
+	local DesiredCFrame =
 		GetTargetWorldPivotCFrame(
 			TargetObject
 		)
 
-	if not TargetCFrame then
+	if not DesiredCFrame then
 		return false
 	end
 
+	local TargetCFrame =
+		FollowMovement:
+			GetSafeDestination(
+				Character,
+				Root,
+				TargetObject,
+				DesiredCFrame
+			)
+
+	if not TargetCFrame then
+		TargetState.EngagementCanClick =
+			false
+		TargetState.EngagementStatus =
+			"Safe destination rejected"
+		FollowMovement.LastFailureAt =
+			os.clock()
+		return true
+	end
+
 	Root.Anchored = false
-	Root.AssemblyLinearVelocity = Vector3.zero
-	Root.AssemblyAngularVelocity = Vector3.zero
+	Root.AssemblyLinearVelocity =
+		Vector3.zero
+	Root.AssemblyAngularVelocity =
+		Vector3.zero
 
 	local IsChronyxSequence =
 		TargetState.IsChronyxShard
@@ -5931,123 +6401,69 @@ local function MoveCharacterLikeFly(
 				== "Chronyx - Super Boss"
 		)
 
-	-- Regular mobs and normal bosses use verified instant positioning.
-	-- Force several consecutive pivots after acquiring a target so an
-	-- old waiting anchor or a one-frame server correction cannot cancel
-	-- the first teleport.
-	if not IsChronyxSequence then
-		local TargetChanged =
-			FollowMovement.LastTarget
-				~= TargetObject
-			or FollowMovement.LastCharacter
-				~= Character
+	local CurrentCFrame =
+		Character:GetPivot()
 
-		if TargetChanged then
-			FollowMovement.RemainingForcedPivots =
-				FollowMovement.ForcedPivotFrames
-		end
+	local Distance =
+		(
+			TargetCFrame.Position
+			- CurrentCFrame.Position
+		).Magnitude
 
-		local CurrentCFrame =
-			Character:GetPivot()
-
-		local Distance =
-			(
-				TargetCFrame.Position
-				- CurrentCFrame.Position
-			).Magnitude
-
-		local MustForcePivot =
-			FollowMovement.RemainingForcedPivots
-				> 0
-			or TargetState
-				.EngagementForceTeleport
-
-		if not MustForcePivot
-			and Distance
-				<= FollowMovement.PivotSkipDistance then
-			if ProfilerState.Enabled then
-				ProfilerState.PivotSkips += 1
-			end
-
-			FollowMovement.LastTarget =
-				TargetObject
-			FollowMovement.LastCharacter =
-				Character
-			FollowMovement.InitialTeleportPending =
-				true
-
-			return true
-		end
-
-		local WasSafetyTeleport =
-			TargetState
-				.EngagementForceTeleport
-
-		local Teleported =
-			ApplyVerifiedCharacterPivot(
-				Character,
-				Root,
-				TargetCFrame
-			)
-
-		if Teleported
-			and WasSafetyTeleport then
-			TargetState
-				.EngagementForceTeleport =
-				false
-			TargetState
-				.EngagementSafetyTeleports +=
-				1
-		end
-
-		if Teleported
-			and FollowMovement.RemainingForcedPivots
-				> 0 then
-			FollowMovement.RemainingForcedPivots -=
-				1
-		end
-
-		FollowMovement.LastTarget =
-			TargetObject
-		FollowMovement.LastCharacter =
-			Character
-		FollowMovement.InitialTeleportPending =
-			true
-
-		return Teleported
-	end
-
-	local NeedsInitialTeleport =
-		FollowMovement.InitialTeleportPending
-		or FollowMovement.LastTarget
+	local TargetChanged =
+		FollowMovement.LastTarget
 			~= TargetObject
 		or FollowMovement.LastCharacter
 			~= Character
-		or TargetState
+
+	if TargetChanged then
+		FollowMovement.LastSafeTarget =
+			nil
+		FollowMovement.LastResolvedSafeCFrame =
+			nil
+		FollowMovement.LastDesiredCFrame =
+			nil
+	end
+
+	local NeedsInitialMove =
+		FollowMovement.InitialTeleportPending
+		or TargetChanged
+
+	local WasSafetyTeleport =
+		TargetState
 			.EngagementForceTeleport
 
-	if NeedsInitialTeleport then
-		-- Chronyx sequence: one verified hard teleport, then smooth
-		-- following remains unchanged.
-		local Teleported =
-			ApplyVerifiedCharacterPivot(
-				Character,
-				Root,
-				TargetCFrame
-			)
+	local HardTeleportNeeded =
+		WasSafetyTeleport
+		or Distance
+			>= FollowMovement
+				.HardTeleportDistance
+		or (
+			NeedsInitialMove
+			and Distance
+				>= FollowMovement
+					.InitialHardTeleportDistance
+		)
 
-		if not Teleported then
-			return false
-		end
+	local Now =
+		os.clock()
 
-		if TargetState
-			.EngagementForceTeleport then
-			TargetState
-				.EngagementForceTeleport =
-				false
-			TargetState
-				.EngagementSafetyTeleports +=
-				1
+	if HardTeleportNeeded
+		and not WasSafetyTeleport
+		and Now
+			- FollowMovement
+				.LastHardTeleportAt
+			< FollowMovement
+				.HardTeleportCooldown then
+		HardTeleportNeeded =
+			false
+	end
+
+	if Distance
+		<= FollowMovement.PivotSkipDistance
+		and not HardTeleportNeeded then
+		if ProfilerState.Enabled then
+			ProfilerState.PivotSkips += 1
 		end
 
 		FollowMovement.LastTarget =
@@ -6056,73 +6472,86 @@ local function MoveCharacterLikeFly(
 			Character
 		FollowMovement.InitialTeleportPending =
 			false
+		FollowMovement.LastMode =
+			"Holding"
 
 		return true
 	end
 
-	local CurrentCFrame =
-		Character:GetPivot()
+	local MoveCFrame
 
-	local Offset =
-		TargetCFrame.Position
-		- CurrentCFrame.Position
-
-	local Distance = Offset.Magnitude
-
-	if Distance
-		<= FollowMovement.PivotSkipDistance then
-		if ProfilerState.Enabled then
-			ProfilerState.PivotSkips += 1
-		end
-
-		return true
-	end
-
-	local FrameTime =
-		math.clamp(
-			tonumber(DeltaTime) or 0,
-			1 / 240,
-			1 / 15
-		)
-
-	local MaximumStep =
-		FollowMovement.Speed
-		* FrameTime
-
-	local NextPosition
-
-	if Distance <= FollowMovement.SnapDistance then
-		NextPosition =
-			TargetCFrame.Position
-	elseif Distance > 0 then
-		NextPosition =
-			CurrentCFrame.Position
-			+ Offset.Unit
-				* math.min(
-					Distance,
-					MaximumStep
-				)
+	if HardTeleportNeeded then
+		MoveCFrame =
+			TargetCFrame
+		FollowMovement.LastMode =
+			WasSafetyTeleport
+				and "Safety teleport"
+				or "Verified teleport"
 	else
-		NextPosition =
-			CurrentCFrame.Position
+		local Speed =
+			IsChronyxSequence
+				and FollowMovement
+					.ChronyxSpeed
+				or FollowMovement
+					.RegularSpeed
+
+		MoveCFrame =
+			FollowMovement:
+				BuildSmoothCFrame(
+					CurrentCFrame,
+					TargetCFrame,
+					DeltaTime,
+					Speed
+				)
+
+		FollowMovement.LastMode =
+			IsChronyxSequence
+				and "Chronyx smooth"
+				or "Adaptive smooth"
 	end
-
-	local TargetRotation =
-		TargetCFrame
-		- TargetCFrame.Position
-
-	local NextCFrame =
-		CFrame.new(NextPosition)
-		* TargetRotation
 
 	local Moved =
 		ApplyVerifiedCharacterPivot(
 			Character,
 			Root,
-			NextCFrame
+			MoveCFrame
 		)
 
-	return Moved
+	if not Moved then
+		TargetState.EngagementCanClick =
+			false
+		TargetState.EngagementStatus =
+			"Movement verification failed"
+		return true
+	end
+
+	if HardTeleportNeeded then
+		FollowMovement.HardTeleports += 1
+		FollowMovement.LastHardTeleportAt =
+			Now
+	else
+		FollowMovement.SmoothSteps += 1
+	end
+
+	if WasSafetyTeleport then
+		TargetState
+			.EngagementForceTeleport =
+				false
+		TargetState
+			.EngagementSafetyTeleports +=
+				1
+	end
+
+	FollowMovement.LastTarget =
+		TargetObject
+	FollowMovement.LastCharacter =
+		Character
+	FollowMovement.InitialTeleportPending =
+		false
+	FollowMovement.RemainingForcedPivots =
+		0
+
+	return true
 end
 
 MoveCharacterLikeFly =
@@ -6170,6 +6599,10 @@ local function HoldWaitingHeight(
 	Root.CFrame = TargetState.WaitingCFrame
 	Root.AssemblyLinearVelocity = Vector3.zero
 	Root.AssemblyAngularVelocity = Vector3.zero
+	FollowMovement.LastSafeCFrame =
+		TargetState.WaitingCFrame
+	FollowMovement.LastMode =
+		"Waiting hold"
 end
 
 local function ReleaseHumanoidState()
@@ -6410,6 +6843,16 @@ local function ResetFarmTargetState()
 	FollowMovement.InitialTeleportPending = true
 	FollowMovement.RemainingForcedPivots =
 		FollowMovement.ForcedPivotFrames
+	FollowMovement.LastResolvedSafeCFrame =
+		nil
+	FollowMovement.LastDesiredCFrame =
+		nil
+	FollowMovement.LastSafeTarget =
+		nil
+	FollowMovement.LastSafeCheckAt = 0
+	FollowMovement.LastFailureAt = 0
+	FollowMovement.LastHardTeleportAt = 0
+	FollowMovement.LastMode = "Idle"
 	TargetState.LastHeldCFrame = nil
 	TargetState.Waiting = false
 	TargetState.WaitingCFrame = nil
@@ -6454,6 +6897,14 @@ local function PrepareFarmRuntime()
 	local Root = GetRoot()
 	TargetState.LastHeldCFrame =
 		Root and Root.CFrame or nil
+	FollowMovement.LastSafeCFrame =
+		Root
+			and CharacterControl:
+				MakeUprightCFrame(
+					Root.CFrame,
+					Root.CFrame
+				)
+			or nil
 
 	FarmState.LastJumpPulse = 0
 	FarmState.LastAutoClick = 0
@@ -6694,6 +7145,34 @@ local function UpdateDiagnosticsControls()
 		.. "  |  Pivot Failures: "
 		.. tostring(
 			FollowMovement.PivotFailures
+		)
+		.. "  |  Move Mode: "
+		.. tostring(
+			FollowMovement.LastMode
+		)
+		.. "  |  Smooth Steps: "
+		.. tostring(
+			FollowMovement.SmoothSteps
+		)
+		.. "  |  Hard TPs: "
+		.. tostring(
+			FollowMovement.HardTeleports
+		)
+		.. "  |  Safe Adjusts: "
+		.. tostring(
+			FollowMovement.SafeAdjustments
+		)
+		.. "  |  Safe Rejects: "
+		.. tostring(
+			FollowMovement.RejectedDestinations
+		)
+		.. "  |  Rollbacks: "
+		.. tostring(
+			FollowMovement.Rollbacks
+		)
+		.. "  |  Safety: "
+		.. tostring(
+			FollowMovement.LastSafetyReason
 		)
 
 	local Signature =
@@ -8177,6 +8656,9 @@ function SecretWatch:EstablishBaseline(
 
 	self.KnownMaximumCounts =
 		Counts
+	table.clear(
+		self.MissingSince
+	)
 	self.TotalCount = Total
 
 	if ResetNewCount then
@@ -8287,20 +8769,31 @@ function SecretWatch:Scan()
 
 	local DetectedCount = 0
 	local DetectedNames = {}
+	local Now = os.clock()
 
+	-- Detect only increases above the stable inventory count.
 	for Signature, Count in pairs(
 		Counts
 	) do
-		local KnownMaximum =
+		local StableCount =
 			self.KnownMaximumCounts[
 				Signature
 			] or 0
 
-		if Count > KnownMaximum then
+		if Count >= StableCount then
+			self.MissingSince[
+				Signature
+			] = nil
+		end
+
+		if Count > StableCount then
 			local AddedCount =
-				Count - KnownMaximum
+				Count - StableCount
 
 			DetectedCount += AddedCount
+			self.KnownMaximumCounts[
+				Signature
+			] = Count
 
 			for _ = 1, AddedCount do
 				table.insert(
@@ -8309,14 +8802,51 @@ function SecretWatch:Scan()
 						or "SECRET"
 				)
 			end
-
 		end
 	end
 
-	-- Store the current snapshot, including decreases. A later increase
-	-- of the same item type is then recognized as a newly obtained item.
-	self.KnownMaximumCounts =
-		Counts
+	-- Do not immediately lower the baseline when an item vanishes.
+	-- Equipping moves a Tool out of Backpack before it appears under
+	-- Character, which can briefly look like remove + reacquire.
+	for Signature, StableCount in pairs(
+		self.KnownMaximumCounts
+	) do
+		local CurrentCount =
+			Counts[Signature] or 0
+
+		if CurrentCount < StableCount then
+			local MissingAt =
+				self.MissingSince[
+					Signature
+				]
+
+			if not MissingAt then
+				self.MissingSince[
+					Signature
+				] = Now
+			elseif Now - MissingAt
+				>= self.CountDropGrace then
+				if CurrentCount > 0 then
+					self.KnownMaximumCounts[
+						Signature
+					] = CurrentCount
+				else
+					self.KnownMaximumCounts[
+						Signature
+					] = nil
+				end
+
+				self.MissingSince[
+					Signature
+				] = nil
+			end
+		else
+			self.MissingSince[
+				Signature
+			] = nil
+		end
+	end
+
 	self.TotalCount = Total
 
 	if DetectedCount > 0 then
@@ -8350,6 +8880,47 @@ function SecretWatch:ContainsSecretWord(
 		"%f[%a]SECRET%f[%A]"
 	) ~= nil
 end
+
+
+function SecretWatch:ContainsAcquisitionWord(
+	Value
+)
+	if Value == nil then
+		return false
+	end
+
+	local Text =
+		string.upper(
+			tostring(Value)
+		)
+
+	for _, Word in ipairs({
+		"OBTAINED",
+		"RECEIVED",
+		"ACQUIRED",
+		"UNLOCKED",
+		"REWARD",
+		"DROP",
+		"DROPPED",
+		"FOUND",
+		"WON",
+		"ROLLED",
+		"HATCHED",
+		"SUMMONED",
+		"NEW",
+	}) do
+		if Text:find(
+			"%f[%a]"
+				.. Word
+				.. "%f[%A]"
+		) then
+			return true
+		end
+	end
+
+	return false
+end
+
 
 function SecretWatch:IsRewardContext(
 	Object
@@ -8466,7 +9037,8 @@ function SecretWatch:InspectSignalObject(
 				Candidate
 			)
 
-		if Rarity == "SECRET" then
+		if IsOrbSource
+			and Rarity == "SECRET" then
 			return self:TriggerSignal(
 				Candidate.Name,
 				Source,
@@ -8489,7 +9061,8 @@ function SecretWatch:InspectSignalObject(
 					)
 				] == true
 
-			if AttributeIsRarity
+			if IsOrbSource
+				and AttributeIsRarity
 				and self:ContainsSecretWord(
 					Value
 				) then
@@ -8514,8 +9087,14 @@ function SecretWatch:InspectSignalObject(
 			)
 			and (
 				IsOrbSource
-				or self:IsRewardContext(
-					Candidate
+				or (
+					self:IsRewardContext(
+						Candidate
+					)
+					and self:
+						ContainsAcquisitionWord(
+							SignalText
+						)
 				)
 			) then
 			return self:TriggerSignal(
@@ -8735,11 +9314,6 @@ function SecretWatch:MarkDirty(
 	self.Dirty = true
 	self.LastEventAt =
 		os.clock()
-	self:ScheduleSignalInspection(
-		Object,
-		"Inventory",
-		0.35
-	)
 end
 
 function SecretWatch:DisconnectCharacterWatchers()
@@ -8846,13 +9420,16 @@ function SecretWatch:SetEnabled(State)
 		table.clear(
 			self.PendingSignalObjects
 		)
+		table.clear(
+			self.MissingSince
+		)
 		self:EstablishBaseline(true)
 		self:BindExistingSignalWatchers()
 
 		pcall(function()
 			Window:Success(
 				"Secret Detector",
-				"Enabled. Watching inventory and reward UI, with a five-second fallback scan.",
+				"Enabled. Newly obtained SECRET items trigger; equip transfers and equip notifications are ignored.",
 				5
 			)
 		end)
@@ -9999,7 +10576,7 @@ MainTab:Section({
 
 UIState.SecretDetectorToggleControl = MainTab:Toggle({
 	name = "Secret Detector",
-	description = "Watches inventory and reward UI, plus a five-second SECRET fallback scan.",
+	description = "Detects newly obtained SECRET items while ignoring equip transfers and equip notifications.",
 	default = false,
 
 	callback = function(State)
@@ -10936,4 +11513,4 @@ if type(Window.RegisterCleanup) == "function" then
 	)
 end
 
-print("[CrimmyScriptz] Enemy controller v111 loaded - delete ClientOrbRewards folder on execution")
+print("[CrimmyScriptz] Enemy controller v113 loaded - adaptive smooth movement and verified safe teleports")
