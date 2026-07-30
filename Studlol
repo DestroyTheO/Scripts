@@ -16,7 +16,9 @@
 --   • Cached-position travel for streamed-out enemies
 --   • Resources tab sourced from Cube Cave CurrentResources
 --   • Search fields on every dropdown
---   • 220 preloaded last-seen pivots (live search still enabled)
+--   • 244 preloaded last-seen pivots (live search still enabled)
+--   • Event-driven enemy scanning with 0.25-second fallback
+--   • Remove Seats toggle with live seat detection
 --   • Auto Block toggle (0.07-second interval)
 --   • Auto Use multiplier dropdown (1x–5x)
 --
@@ -1949,6 +1951,199 @@ local BUILT_IN_POSITION_RECORDS = {
 		CFrame = CFrame.new(-706.649780, -186.732666, -1844.139893, -0.615635, 0.000000, 0.788032, 0.000000, 1.000000, 0.000000, -0.788032, 0.000000, -0.615635),
 		LastSeenUnix = 0,
 	},
+	["R00098"] = {
+		Key = "R00098",
+		Area = "CaveArea",
+		Name = "Bonezo",
+		Kind = "Enemy",
+		CFrame = CFrame.new(2014.540039, -1640.736084, -6455.603027, 0.104543, 0.000000, 0.994520, 0.000000, 1.000000, 0.000000, -0.994520, 0.000000, 0.104543),
+		LastSeenUnix = 0,
+	},
+	["R00102"] = {
+		Key = "R00102",
+		Area = "CaveArea",
+		Name = "Bonezo",
+		Kind = "Enemy",
+		CFrame = CFrame.new(1867.992676, -1646.736084, -6577.789062, -0.139204, 0.000000, -0.990264, 0.000000, 1.000000, 0.000000, 0.990264, 0.000000, -0.139204),
+		LastSeenUnix = 0,
+	},
+	["R00104"] = {
+		Key = "R00104",
+		Area = "CaveArea",
+		Name = "Bonezo",
+		Kind = "Enemy",
+		CFrame = CFrame.new(1865.271362, -1640.736084, -6444.925293, -0.681974, 0.000000, 0.731377, 0.000000, 1.000000, 0.000000, -0.731377, 0.000000, -0.681974),
+		LastSeenUnix = 0,
+	},
+	["R00106"] = {
+		Key = "R00106",
+		Area = "CaveArea",
+		Name = "Bonezo",
+		Kind = "Enemy",
+		CFrame = CFrame.new(1833.763184, -1646.736084, -6663.278809, 0.906297, 0.000000, -0.422642, 0.000000, 1.000000, 0.000000, 0.422642, 0.000000, 0.906297),
+		LastSeenUnix = 0,
+	},
+	["R00109"] = {
+		Key = "R00109",
+		Area = "CaveArea",
+		Name = "Bonezo",
+		Kind = "Enemy",
+		CFrame = CFrame.new(1754.472656, -1645.736084, -6589.082520, -0.890995, 0.000000, -0.454013, 0.000000, 1.000000, 0.000000, 0.454013, 0.000000, -0.890995),
+		LastSeenUnix = 0,
+	},
+	["R00111"] = {
+		Key = "R00111",
+		Area = "CaveArea",
+		Name = "Bonezo",
+		Kind = "Enemy",
+		CFrame = CFrame.new(1766.647461, -1640.736084, -6453.202148, -0.838689, 0.000000, 0.544611, 0.000000, 1.000000, 0.000000, -0.544611, 0.000000, -0.838689),
+		LastSeenUnix = 0,
+	},
+	["R00112"] = {
+		Key = "R00112",
+		Area = "CaveArea",
+		Name = "Cave Spidey",
+		Kind = "Enemy",
+		CFrame = CFrame.new(2827.593018, -1639.232666, -7350.970703, -0.920511, 0.000000, -0.390718, 0.000000, 1.000000, 0.000000, 0.390718, 0.000000, -0.920511),
+		LastSeenUnix = 0,
+	},
+	["R00114"] = {
+		Key = "R00114",
+		Area = "CaveArea",
+		Name = "Cave Spidey",
+		Kind = "Enemy",
+		CFrame = CFrame.new(2349.891357, -1639.232666, -7649.282227, -0.951068, 0.000000, -0.308980, 0.000000, 1.000000, 0.000000, 0.308980, 0.000000, -0.951068),
+		LastSeenUnix = 0,
+	},
+	["R00097"] = {
+		Key = "R00097",
+		Area = "CaveArea",
+		Name = "Cavey",
+		Kind = "Enemy",
+		CFrame = CFrame.new(2163.805664, -1546.449951, -6570.010742, 0.484826, 0.000000, -0.874611, 0.000000, 1.000000, 0.000000, 0.874611, 0.000000, 0.484826),
+		LastSeenUnix = 0,
+	},
+	["R00099"] = {
+		Key = "R00099",
+		Area = "CaveArea",
+		Name = "Cavey",
+		Kind = "Enemy",
+		CFrame = CFrame.new(2148.410156, -1548.733032, -6685.903809, 0.873753, -0.000000, -0.486369, 0.000000, 1.000000, 0.000000, 0.486369, -0.000000, 0.873753),
+		LastSeenUnix = 0,
+	},
+	["R00100"] = {
+		Key = "R00100",
+		Area = "CaveArea",
+		Name = "Cavey",
+		Kind = "Enemy",
+		CFrame = CFrame.new(2253.058594, -1548.733032, -6676.641602, -0.541304, 0.000000, 0.840827, 0.000000, 1.000000, 0.000000, -0.840827, 0.000000, -0.541304),
+		LastSeenUnix = 0,
+	},
+	["R00103"] = {
+		Key = "R00103",
+		Area = "CaveArea",
+		Name = "Cavey",
+		Kind = "Enemy",
+		CFrame = CFrame.new(1901.189087, -1571.732666, -6529.543457, -0.866007, 0.000000, 0.500031, 0.000000, 1.000000, 0.000000, -0.500031, 0.000000, -0.866007),
+		LastSeenUnix = 0,
+	},
+	["R00105"] = {
+		Key = "R00105",
+		Area = "CaveArea",
+		Name = "Cavey",
+		Kind = "Enemy",
+		CFrame = CFrame.new(1798.298218, -1570.732666, -6765.112793, -0.656063, 0.000000, -0.754706, 0.000000, 1.000000, 0.000000, 0.754706, 0.000000, -0.656063),
+		LastSeenUnix = 0,
+	},
+	["R00110"] = {
+		Key = "R00110",
+		Area = "CaveArea",
+		Name = "Cavey",
+		Kind = "Enemy",
+		CFrame = CFrame.new(1726.018066, -1568.732666, -6582.105957, 1.000000, 0.000000, 0.000000, 0.000000, 1.000000, 0.000000, 0.000000, 0.000000, 1.000000),
+		LastSeenUnix = 0,
+	},
+	["R00115"] = {
+		Key = "R00115",
+		Area = "CaveArea",
+		Name = "Cavey",
+		Kind = "Enemy",
+		CFrame = CFrame.new(2266.980713, -1546.684326, -6698.002930, -0.107033, 0.048742, -0.993060, -0.001048, 0.998792, 0.049137, 0.994255, 0.006300, -0.106853),
+		LastSeenUnix = 0,
+	},
+	["R00113"] = {
+		Key = "R00113",
+		Area = "CaveArea",
+		Name = "Sentient Assault Rifle",
+		Kind = "Enemy",
+		CFrame = CFrame.new(2566.645996, -1565.732666, -7301.930176, 0.529884, 0.000000, -0.848070, 0.000000, 1.000000, 0.000000, 0.848070, 0.000000, 0.529884),
+		LastSeenUnix = 0,
+	},
+	["R00101"] = {
+		Key = "R00101",
+		Area = "CaveArea",
+		Name = "Spidey",
+		Kind = "Enemy",
+		CFrame = CFrame.new(1876.149780, -1583.232666, -6671.099121, -0.121902, 0.000000, -0.992542, 0.000000, 1.000000, 0.000000, 0.992542, 0.000000, -0.121902),
+		LastSeenUnix = 0,
+	},
+	["R00107"] = {
+		Key = "R00107",
+		Area = "CaveArea",
+		Name = "Spidey",
+		Kind = "Enemy",
+		CFrame = CFrame.new(1818.120117, -1583.232666, -6580.131836, -0.994518, 0.000000, -0.104565, 0.000000, 1.000000, 0.000000, 0.104565, 0.000000, -0.994518),
+		LastSeenUnix = 0,
+	},
+	["R00108"] = {
+		Key = "R00108",
+		Area = "CaveArea",
+		Name = "Spidey",
+		Kind = "Enemy",
+		CFrame = CFrame.new(1770.283691, -1583.232666, -6672.774414, -0.951068, 0.000000, 0.308980, 0.000000, 1.000000, 0.000000, -0.308980, 0.000000, -0.951068),
+		LastSeenUnix = 0,
+	},
+	["R00534"] = {
+		Key = "R00534",
+		Area = "StarterArea",
+		Name = "Blooming Flowey",
+		Kind = "Enemy",
+		CFrame = CFrame.new(-183.342178, -320.476532, -1665.867676, -0.996192, 0.000000, 0.087188, 0.000000, 1.000000, 0.000000, -0.087188, 0.000000, -0.996192),
+		LastSeenUnix = 0,
+	},
+	["R00488"] = {
+		Key = "R00488",
+		Area = "StarterArea",
+		Name = "Mushmasher",
+		Kind = "Enemy",
+		CFrame = CFrame.new(-1813.142090, -312.132355, -325.667633, 0.406715, 0.000000, -0.913555, 0.000000, 1.000000, 0.000000, 0.913555, 0.000000, 0.406715),
+		LastSeenUnix = 0,
+	},
+	["R00052"] = {
+		Key = "R00052",
+		Area = "StarterArea",
+		Name = "Rogue Cubey",
+		Kind = "Enemy",
+		CFrame = CFrame.new(83.857857, -351.732422, -914.467651, 0.104543, 0.000000, -0.994520, 0.000000, 1.000000, 0.000000, 0.994520, 0.000000, 0.104543),
+		LastSeenUnix = 0,
+	},
+	["R00548"] = {
+		Key = "R00548",
+		Area = "StarterArea",
+		Name = "Rogue Cubey",
+		Kind = "Enemy",
+		CFrame = CFrame.new(25.989946, -349.739563, -899.283020, 0.269447, 0.000000, -0.963015, 0.000000, 1.000000, 0.000000, 0.963015, 0.000000, 0.269447),
+		LastSeenUnix = 0,
+	},
+	["R00502"] = {
+		Key = "R00502",
+		Area = "StarterArea",
+		Name = "Rustey",
+		Kind = "Enemy",
+		CFrame = CFrame.new(-2107.441895, -413.625275, 1146.432373, -0.309061, 0.000000, 0.951042, 0.000000, 1.000000, 0.000000, -0.951042, 0.000000, -0.309061),
+		LastSeenUnix = 0,
+	},
+
 }
 
 local function mergeBuiltInPositionRecords()
@@ -1978,7 +2173,7 @@ local function mergeBuiltInPositionRecords()
 
 	PersistentFarmState.NextPositionRecordId = math.max(
 		PersistentFarmState.NextPositionRecordId,
-		444
+		548
 	)
 end
 
@@ -1991,6 +2186,8 @@ local EnemyPositionState = {
 	SelectedKey = nil,
 	TravelIndex = 0,
 	NewRecordVersion = 0,
+	DataVersion = 0,
+	LastRenderedDataVersion = -1,
 }
 
 local ResourceState = {
@@ -2016,6 +2213,11 @@ local FlyState = {
 	Speed = 175,
 	VerticalSpeed = 75,
 	YLevel = nil,
+}
+
+local RemoveSeatsState = {
+	Enabled = false,
+	RemovedCount = 0,
 }
 
 --==================================================
@@ -2045,6 +2247,82 @@ local function disconnectAll()
 		Connections[index] = nil
 	end
 end
+
+--==================================================
+-- REMOVE SEATS
+--==================================================
+local function isSeat(instance)
+	return instance
+		and (
+			instance:IsA("Seat")
+			or instance:IsA("VehicleSeat")
+		)
+end
+
+local function removeSeat(instance)
+	if not RemoveSeatsState.Enabled
+		or not isSeat(instance) then
+
+		return false
+	end
+
+	local removed = pcall(function()
+		instance:Destroy()
+	end)
+
+	if removed then
+		RemoveSeatsState.RemovedCount += 1
+	end
+
+	return removed
+end
+
+local function removeAllSeats(container)
+	if not RemoveSeatsState.Enabled then
+		return 0
+	end
+
+	container = container or Workspace
+
+	local removedBefore =
+		RemoveSeatsState.RemovedCount
+
+	for _, object in ipairs(container:GetDescendants()) do
+		removeSeat(object)
+	end
+
+	return RemoveSeatsState.RemovedCount
+		- removedBefore
+end
+
+local function setRemoveSeatsEnabled(state)
+	RemoveSeatsState.Enabled = state == true
+
+	if RemoveSeatsState.Enabled then
+		local removed = removeAllSeats(Workspace)
+
+		print(
+			"Remove Seats: ON | Removed:",
+			removed
+		)
+	else
+		print(
+			"Remove Seats: OFF | "
+			.. "Destroyed seats cannot be restored client-side"
+		)
+	end
+end
+
+local RemoveSeatsConnection =
+	Workspace.DescendantAdded:Connect(function(object)
+		if RemoveSeatsState.Enabled
+			and isSeat(object) then
+
+			task.defer(removeSeat, object)
+		end
+	end)
+
+trackConnection(RemoveSeatsConnection)
 
 --==================================================
 -- CHARACTER CONTAINER DETECTION
@@ -2877,13 +3155,13 @@ local function recordEnemyPivot(areaName, enemy)
 		or not enemy.Parent
 		or isBlacklistedEnemyName(enemy.Name) then
 
-		return false
+		return false, false
 	end
 
 	local pivot = getEnemyPivot(enemy)
 
 	if not pivot then
-		return false
+		return false, false
 	end
 
 	local key =
@@ -2899,22 +3177,48 @@ local function recordEnemyPivot(areaName, enemy)
 
 		if not key then
 			key = nextPositionRecordKey()
-			EnemyPositionState.NewRecordVersion += 1
 		end
 
 		EnemyPositionState.InstanceRecordKeys[enemy] = key
 	end
 
-	local isNew =
-		EnemyPositionState.Records[key] == nil
+	local previous =
+		EnemyPositionState.Records[key]
+
+	local isNew = previous == nil
+	local kind = isMimicName(enemy.Name)
+		and "Mimic"
+		or "Enemy"
+
+	local changed = isNew
+
+	if previous then
+		if previous.Area ~= areaName
+			or previous.Name ~= enemy.Name
+			or previous.Kind ~= kind
+			or typeof(previous.CFrame) ~= "CFrame" then
+
+			changed = true
+		else
+			local positionChanged =
+				(previous.CFrame.Position - pivot.Position).Magnitude
+				>= 0.05
+
+			local rotationChanged =
+				previous.CFrame.LookVector:Dot(
+					pivot.LookVector
+				) < 0.9999
+
+			changed = positionChanged
+				or rotationChanged
+		end
+	end
 
 	EnemyPositionState.Records[key] = {
 		Key = key,
 		Area = areaName,
 		Name = enemy.Name,
-		Kind = isMimicName(enemy.Name)
-			and "Mimic"
-			or "Enemy",
+		Kind = kind,
 		CFrame = pivot,
 		LastSeenUnix = os.time(),
 	}
@@ -2926,7 +3230,11 @@ local function recordEnemyPivot(areaName, enemy)
 		EnemyPositionState.NewRecordVersion += 1
 	end
 
-	return isNew
+	if changed then
+		EnemyPositionState.DataVersion += 1
+	end
+
+	return isNew, changed
 end
 
 local function isAliveEnemy(enemy)
@@ -3432,17 +3740,164 @@ local function setMimicFarmEnabled(state, synchronizeToggle)
 end
 
 -- Discover enemy and Mimic names even while Auto Farm is off.
--- The name caches are never cleared when folders become empty.
+-- ChildAdded catches new spawns immediately. The periodic scan remains
+-- as a fallback for StreamingEnabled folder replacement or missed events.
+local WatchedEnemyFolders = setmetatable({}, {
+	__mode = "k",
+})
+
+local function refreshEnemyDropdownItems(
+	enemyChanged,
+	mimicChanged
+)
+	if enemyChanged and EnemyDropdown then
+		pcall(function()
+			EnemyDropdown:SetItems(
+				sortedEnemyNames()
+			)
+
+			EnemyDropdown:Set(
+				AutoFarmState.SelectedEnemies,
+				true
+			)
+		end)
+	end
+
+	if mimicChanged and MimicDropdown then
+		pcall(function()
+			MimicDropdown:SetItems(
+				sortedMimicNames()
+			)
+
+			MimicDropdown:Set(
+				AutoFarmState.SelectedMimics,
+				true
+			)
+		end)
+	end
+end
+
+local function scanSingleEnemyInstance(
+	areaName,
+	enemy
+)
+	task.spawn(function()
+		local enemyChanged = false
+		local mimicChanged = false
+
+		-- Streamed models can be parented before their root parts exist.
+		-- Retry briefly so their pivot is still captured.
+		for _ = 1, 30 do
+			if not enemy or not enemy.Parent then
+				break
+			end
+
+			if not isBlacklistedEnemyName(enemy.Name) then
+				if isMimicName(enemy.Name) then
+					if rememberMimicName(enemy.Name) then
+						mimicChanged = true
+					end
+				else
+					if rememberEnemyName(enemy.Name) then
+						enemyChanged = true
+					end
+				end
+
+				local _, positionChanged =
+					recordEnemyPivot(areaName, enemy)
+
+				if positionChanged
+					or getEnemyPivot(enemy) then
+
+					break
+				end
+			end
+
+			task.wait(0.05)
+		end
+
+		refreshEnemyDropdownItems(
+			enemyChanged,
+			mimicChanged
+		)
+	end)
+end
+
+local function watchEnemiesFolder(
+	areaName,
+	folder
+)
+	if not folder
+		or WatchedEnemyFolders[folder] then
+
+		return
+	end
+
+	WatchedEnemyFolders[folder] = true
+
+	for _, enemy in ipairs(folder:GetChildren()) do
+		scanSingleEnemyInstance(
+			areaName,
+			enemy
+		)
+	end
+
+	trackConnection(
+		folder.ChildAdded:Connect(function(enemy)
+			scanSingleEnemyInstance(
+				areaName,
+				enemy
+			)
+		end)
+	)
+
+	trackConnection(
+		folder.AncestryChanged:Connect(
+			function(_, parent)
+				if not parent then
+					WatchedEnemyFolders[folder] = nil
+				end
+			end
+		)
+	)
+end
+
+local function refreshEnemyFolderWatchers()
+	for _, areaName in ipairs(AREA_NAMES) do
+		local folder =
+			getAreaEnemiesFolder(areaName)
+
+		if folder then
+			watchEnemiesFolder(
+				areaName,
+				folder
+			)
+		end
+	end
+end
+
+refreshEnemyFolderWatchers()
+
 local EnemyNameScannerConnection =
 	RunService.Heartbeat:Connect(function()
-		if not AutoFarmState._NextMimicScan
+		if not AutoFarmState._NextEnemyScan
 			or os.clock()
-				>= AutoFarmState._NextMimicScan then
+				>= AutoFarmState._NextEnemyScan then
 
-			AutoFarmState._NextMimicScan =
-				os.clock() + 1
+			AutoFarmState._NextEnemyScan =
+				os.clock() + 0.25
 
-			scanEnemyNamesAndMimics()
+			refreshEnemyFolderWatchers()
+
+			local ok, errorMessage =
+				pcall(scanEnemyNamesAndMimics)
+
+			if not ok then
+				warn(
+					"Enemy scanner error:",
+					errorMessage
+				)
+			end
 		end
 	end)
 
@@ -3765,6 +4220,53 @@ local function refreshEnemyDataUI()
 	end
 end
 
+local EnemyDataUIRefreshConnection =
+	RunService.Heartbeat:Connect(function()
+		if not EnemyPositionState._NextUIRefresh
+			or os.clock()
+				>= EnemyPositionState._NextUIRefresh then
+
+			EnemyPositionState._NextUIRefresh =
+				os.clock() + 0.35
+
+			if EnemyPositionState.DataVersion
+				~= EnemyPositionState.LastRenderedDataVersion then
+
+				EnemyPositionState.LastRenderedDataVersion =
+					EnemyPositionState.DataVersion
+
+				local ok, errorMessage =
+					pcall(refreshEnemyDataUI)
+
+				if not ok then
+					warn(
+						"Enemy Data UI refresh error:",
+						errorMessage
+					)
+				end
+			elseif EnemyDataCodeBlock
+				and EnemyPositionState.SelectedKey then
+
+				local record =
+					EnemyPositionState.Records[
+						EnemyPositionState.SelectedKey
+					]
+
+				if record then
+					pcall(function()
+						EnemyDataCodeBlock:Set(
+							formatEnemyPositionRecord(
+								record
+							)
+						)
+					end)
+				end
+			end
+		end
+	end)
+
+trackConnection(EnemyDataUIRefreshConnection)
+
 --==================================================
 -- MOVEMENT: SIMPLE FLY
 --==================================================
@@ -4067,6 +4569,30 @@ MainTab:Info({
 })
 
 --==================================================
+-- MAIN TAB UI: REMOVE SEATS
+--==================================================
+MainTab:Section({
+	name = "Remove Seats",
+	subtitle = "Removes Seat and VehicleSeat instances while enabled",
+})
+
+MainTab:Toggle({
+	name = "Remove Seats",
+	description = "Deletes existing seats and newly added seats",
+	default = false,
+	flag = "mainRemoveSeatsEnabled",
+
+	callback = function(state)
+		setRemoveSeatsEnabled(state)
+	end,
+})
+
+MainTab:Info({
+	text = "Turning the toggle off stops future removals. "
+		.. "Seats already destroyed cannot be restored without reloading.",
+})
+
+--==================================================
 -- MAIN TAB UI: AUTO FARM
 --==================================================
 MainTab:Section({
@@ -4266,7 +4792,9 @@ EnemyDataTab:Button({
 	icon = Library.Icons.refresh,
 
 	callback = function()
+		refreshEnemyFolderWatchers()
 		scanEnemyNamesAndMimics()
+		EnemyPositionState.DataVersion += 1
 		refreshEnemyDataUI()
 	end,
 })
@@ -4317,6 +4845,7 @@ EnemyDataTab:Button({
 		EnemyPositionState.SelectedKey = nil
 		EnemyPositionState.TravelIndex = 0
 		EnemyPositionState.NewRecordVersion += 1
+		EnemyPositionState.DataVersion += 1
 
 		refreshEnemyDataUI()
 	end,
@@ -4431,6 +4960,8 @@ Library:RegisterGlobalCleanup(function()
 	AutoBlockState.Enabled = false
 	AutoBlockState.Generation += 1
 
+	RemoveSeatsState.Enabled = false
+
 	AutoFarmState.EnemyEnabled = false
 	AutoFarmState.MimicEnabled = false
 	AutoFarmState.Generation += 1
@@ -4450,4 +4981,4 @@ Library:RegisterGlobalCleanup(function()
 end, "CrimsonHubMainMovementCleanup")
 
 print("Crimson Hub loaded")
-print("RightShift = UI | J = Auto Use | X = Fly | Searchable Enemies, Mimics, Resources, and Enemy Data")
+print("RightShift = UI | J = Auto Use | X = Fly | Remove Seats toggle added")
