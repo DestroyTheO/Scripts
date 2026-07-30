@@ -19,6 +19,7 @@
 --   • 244 preloaded last-seen pivots (live search still enabled)
 --   • Event-driven enemy scanning with 0.25-second fallback
 --   • Remove Seats toggle with live seat detection
+--   • Auto Farm teleports near each target before tween-following
 --   • Auto Block toggle (0.07-second interval)
 --   • Auto Use multiplier dropdown (1x–5x)
 --
@@ -148,6 +149,8 @@ local AutoFarmState = {
 	Generation = 0,
 	TweenSpeed = 250,
 	BehindDistance = 4,
+	TeleportHeight = 8,
+	TeleportSettleTime = 0.05,
 	SelectedEnemies =
 		type(PersistentFarmState.SelectedEnemies) == "table"
 		and table.clone(PersistentFarmState.SelectedEnemies)
@@ -3523,6 +3526,78 @@ local function getFarmCharacterRoot()
 		and character:FindFirstChild("HumanoidRootPart")
 end
 
+local function stopRootVelocity(root)
+	if not root then
+		return
+	end
+
+	pcall(function()
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+	end)
+end
+
+local function teleportFarmRoot(destination)
+	local playerRoot = getFarmCharacterRoot()
+
+	if not playerRoot
+		or typeof(destination) ~= "CFrame" then
+
+		return false
+	end
+
+	cancelFarmTween()
+	stopRootVelocity(playerRoot)
+
+	playerRoot.CFrame = destination
+
+	stopRootVelocity(playerRoot)
+
+	task.wait(
+		AutoFarmState.TeleportSettleTime
+	)
+
+	return true
+end
+
+local function teleportNearEnemy(enemy)
+	local enemyRoot = getEnemyRoot(enemy)
+	local enemyHumanoid = getEnemyHumanoid(enemy)
+
+	if not enemyRoot
+		or not enemyHumanoid
+		or enemyHumanoid.Health <= 0 then
+
+		return false
+	end
+
+	return teleportFarmRoot(
+		enemyRoot.CFrame
+			* CFrame.new(
+				0,
+				AutoFarmState.TeleportHeight,
+				0
+			)
+	)
+end
+
+local function teleportNearCachedRecord(record)
+	if not record
+		or typeof(record.CFrame) ~= "CFrame" then
+
+		return false
+	end
+
+	return teleportFarmRoot(
+		record.CFrame
+			* CFrame.new(
+				0,
+				AutoFarmState.TeleportHeight,
+				0
+			)
+	)
+end
+
 local function tweenToCachedRecord(record)
 	local playerRoot = getFarmCharacterRoot()
 
@@ -3640,7 +3715,15 @@ local function runAutoFarm(generation)
 				getNextCachedFarmRecord()
 
 			if cachedRecord then
-				tweenToCachedRecord(cachedRecord)
+				if teleportNearCachedRecord(
+					cachedRecord
+				) then
+
+					tweenToCachedRecord(
+						cachedRecord
+					)
+				end
+
 				task.wait(0.15)
 			else
 				task.wait(0.20)
@@ -3650,6 +3733,12 @@ local function runAutoFarm(generation)
 		end
 
 		AutoFarmState.CurrentTarget = target
+
+		if not teleportNearEnemy(target) then
+			AutoFarmState.CurrentTarget = nil
+			task.wait(0.05)
+			continue
+		end
 
 		while isAnyFarmEnabled()
 			and AutoFarmState.Generation == generation
@@ -4652,7 +4741,7 @@ MimicDropdown = MainTab:SearchDropdown({
 
 EnemyFarmToggle = MainTab:Toggle({
 	name = "Auto Farm Enemies",
-	description = "Farms regular enemies selected in the Enemies dropdown",
+	description = "Teleports near, then tween-follows selected regular enemies",
 	default = false,
 	flag = "mainAutoFarmEnemiesEnabled",
 
@@ -4663,7 +4752,7 @@ EnemyFarmToggle = MainTab:Toggle({
 
 MimicFarmToggle = MainTab:Toggle({
 	name = "Auto Farm Mimics",
-	description = "Farms Mimics selected in the Mimics dropdown",
+	description = "Teleports near, then tween-follows selected Mimics",
 	default = false,
 	flag = "mainAutoFarmMimicsEnabled",
 
@@ -4673,9 +4762,10 @@ MimicFarmToggle = MainTab:Toggle({
 })
 
 MainTab:Info({
-	text = "Enemy and Mimic farming have separate toggles and can run together. "
-		.. "Names and selections stay saved after despawning. "
-		.. "Target Dummy is always blacklisted.",
+	text = "For each target, Auto Farm teleports 8 studs above it first, "
+		.. "then CFrame-tweens behind it until it dies. "
+		.. "Enemy and Mimic toggles can run together. "
+		.. "Target Dummy remains blacklisted.",
 })
 
 --==================================================
@@ -4981,4 +5071,4 @@ Library:RegisterGlobalCleanup(function()
 end, "CrimsonHubMainMovementCleanup")
 
 print("Crimson Hub loaded")
-print("RightShift = UI | J = Auto Use | X = Fly | Remove Seats toggle added")
+print("RightShift = UI | J = Auto Use | X = Fly | Auto Farm teleports then tweens")
