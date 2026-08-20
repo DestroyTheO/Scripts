@@ -1,0 +1,226 @@
+local Library = loadstring(game:HttpGet(
+    "https://raw.githubusercontent.com/DestroyTheO/MenuXD/refs/heads/main/Main"
+))()
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+
+local Window = Library:CreateWindow({
+    name = "Crimson Hub",
+    subtitle = "Muscle Training",
+    theme = "Carbon",
+    toggleKey = Enum.KeyCode.RightShift
+})
+
+local MainTab = Window:CreateTab({
+    name = "Main",
+    icon = Library.Icons.home
+})
+
+--// =====================================
+--// NUMBER FORMATTER
+--// =====================================
+
+local function FormatNumber(Number)
+    Number = tonumber(Number) or 0
+
+    local Suffixes = {
+        {1e18, "qi"},
+        {1e15, "q"},
+        {1e12, "t"},
+        {1e9, "b"},
+        {1e6, "m"},
+        {1e3, "k"}
+    }
+
+    for _, Data in ipairs(Suffixes) do
+        local Size = Data[1]
+        local Suffix = Data[2]
+
+        if math.abs(Number) >= Size then
+            local Result = Number / Size
+
+            if Result >= 100 then
+                Result = string.format("%.0f", Result)
+            elseif Result >= 10 then
+                Result = string.format("%.1f", Result)
+            else
+                Result = string.format("%.2f", Result)
+            end
+
+            Result = Result:gsub("%.?0+$", "")
+
+            return Result .. Suffix
+        end
+    end
+
+    return tostring(math.floor(Number))
+end
+
+--// =====================================
+--// LIVE STATS
+--// =====================================
+
+MainTab:Section({
+    name = "Live Stats",
+    subtitle = "Your current player statistics",
+    icon = "📊"
+})
+
+local Leaderstats = LocalPlayer:WaitForChild("leaderstats")
+local Rebirths = Leaderstats:WaitForChild("Rebirths")
+
+local RebirthCard = MainTab:Paragraph({
+    title = "Rebirths",
+    text = FormatNumber(Rebirths.Value),
+    icon = "🔄"
+})
+
+local RebirthText = RebirthCard:FindFirstChild("ParagraphBody", true)
+
+local function UpdateRebirths()
+    if RebirthText then
+        RebirthText.Text = FormatNumber(Rebirths.Value)
+    end
+end
+
+UpdateRebirths()
+
+Rebirths:GetPropertyChangedSignal("Value"):Connect(UpdateRebirths)
+
+--// =====================================
+--// AUTO TRAINING
+--// =====================================
+
+MainTab:Section({
+    name = "Auto Training",
+    subtitle = "Automatic muscle and rebirth actions",
+    icon = "⚡"
+})
+
+--// AUTO REP
+
+local AutoRep = false
+local AutoRepThread = nil
+
+MainTab:Toggle({
+    name = "Auto Rep",
+    description = "Continuously performs reps",
+    default = false,
+    onText = "ACTIVE",
+    offText = "OFF",
+
+    callback = function(Value)
+        AutoRep = Value
+
+        if Value and not AutoRepThread then
+            AutoRepThread = task.spawn(function()
+                while AutoRep do
+                    local MuscleEvent =
+                        LocalPlayer:FindFirstChild("muscleEvent")
+
+                    if MuscleEvent then
+                        MuscleEvent:FireServer("rep")
+                    end
+
+                    task.wait()
+                end
+
+                AutoRepThread = nil
+            end)
+        end
+    end
+})
+
+--// AUTO STOMP
+
+local AutoStomp = false
+local AutoStompThread = nil
+
+MainTab:Toggle({
+    name = "Auto Stomp",
+    description = "Continuously performs stomps",
+    default = false,
+    onText = "ACTIVE",
+    offText = "OFF",
+
+    callback = function(Value)
+        AutoStomp = Value
+
+        if Value and not AutoStompThread then
+            AutoStompThread = task.spawn(function()
+                while AutoStomp do
+                    local MuscleEvent =
+                        LocalPlayer:FindFirstChild("muscleEvent")
+
+                    if MuscleEvent then
+                        MuscleEvent:FireServer("stomp")
+                    end
+
+                    task.wait()
+                end
+
+                AutoStompThread = nil
+            end)
+        end
+    end
+})
+
+--// AUTO MASS REBIRTH
+
+local AutoMassRebirth = false
+local AutoMassRebirthThread = nil
+
+MainTab:Toggle({
+    name = "Auto Mass Rebirth",
+    description = "Continuously requests 500 rebirths",
+    default = false,
+    onText = "ACTIVE",
+    offText = "OFF",
+
+    callback = function(Value)
+        AutoMassRebirth = Value
+
+        if Value and not AutoMassRebirthThread then
+            AutoMassRebirthThread = task.spawn(function()
+                while AutoMassRebirth do
+                    local REvents =
+                        ReplicatedStorage:FindFirstChild("rEvents")
+
+                    local RebirthRemote =
+                        REvents and REvents:FindFirstChild("rebirthRemote")
+
+                    if RebirthRemote then
+                        pcall(function()
+                            RebirthRemote:InvokeServer(
+                                "massRebirthRequest",
+                                500
+                            )
+                        end)
+                    end
+
+                    task.wait()
+                end
+
+                AutoMassRebirthThread = nil
+            end)
+        end
+    end
+})
+
+--// =====================================
+--// INFORMATION
+--// =====================================
+
+MainTab:Section({
+    name = "Information",
+    subtitle = "Current automation features",
+    icon = "ℹ️"
+})
+
+MainTab:Paragraph({
+    title = "Automation",
+    text = "Auto Rep, Auto Stomp, and Auto Mass Rebirth can all be enabled independently."
+})
