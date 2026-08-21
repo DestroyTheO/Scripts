@@ -87,7 +87,6 @@ local function UpdateRebirths()
 end
 
 UpdateRebirths()
-
 Rebirths:GetPropertyChangedSignal("Value"):Connect(UpdateRebirths)
 
 --// =====================================
@@ -96,7 +95,7 @@ Rebirths:GetPropertyChangedSignal("Value"):Connect(UpdateRebirths)
 
 MainTab:Section({
     name = "Auto Training",
-    subtitle = "Automatic muscle and rebirth actions",
+    subtitle = "Automatic muscle actions",
     icon = "⚡"
 })
 
@@ -168,7 +167,15 @@ MainTab:Toggle({
     end
 })
 
---// AUTO MASS REBIRTH
+--// =====================================
+--// REBIRTHS
+--// =====================================
+
+MainTab:Section({
+    name = "Rebirths",
+    subtitle = "Automatic rebirth controls",
+    icon = "♻️"
+})
 
 local AutoMassRebirth = false
 local AutoMassRebirthThread = nil
@@ -211,6 +218,57 @@ MainTab:Toggle({
 })
 
 --// =====================================
+--// CRYSTALS
+--// =====================================
+
+MainTab:Section({
+    name = "Crystals",
+    subtitle = "Automatic crystal opening",
+    icon = "💎"
+})
+
+local AutoCrystal = false
+local AutoCrystalThread = nil
+
+MainTab:Toggle({
+    name = "Auto Crystal",
+    description = "Opens Unlimited Secrets Crystal automatically",
+    default = false,
+    onText = "ACTIVE",
+    offText = "OFF",
+
+    callback = function(Value)
+        AutoCrystal = Value
+
+        if Value and not AutoCrystalThread then
+            AutoCrystalThread = task.spawn(function()
+                while AutoCrystal do
+                    local REvents =
+                        ReplicatedStorage:FindFirstChild("rEvents")
+
+                    local OpenCrystalRemote =
+                        REvents and REvents:FindFirstChild("openCrystalRemote")
+
+                    if OpenCrystalRemote then
+                        pcall(function()
+                            OpenCrystalRemote:InvokeServer(
+                                "openCrystal",
+                                "Unlimited Secrets Crystal",
+                                1
+                            )
+                        end)
+                    end
+
+                    task.wait(0.3)
+                end
+
+                AutoCrystalThread = nil
+            end)
+        end
+    end
+})
+
+--// =====================================
 --// INFORMATION
 --// =====================================
 
@@ -221,6 +279,6 @@ MainTab:Section({
 })
 
 MainTab:Paragraph({
-    title = "Automation",
-    text = "Auto Rep, Auto Stomp, and Auto Mass Rebirth can all be enabled independently."
+    title = "Crimson Hub",
+    text = "Auto Rep, Auto Stomp, Auto Mass Rebirth, and Auto Crystal can all run independently."
 })
