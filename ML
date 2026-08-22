@@ -99,8 +99,6 @@ MainTab:Section({
     icon = "⚡"
 })
 
---// AUTO REP
-
 local AutoRep = false
 local AutoRepThread = nil
 
@@ -132,8 +130,6 @@ MainTab:Toggle({
         end
     end
 })
-
---// AUTO STOMP
 
 local AutoStomp = false
 local AutoStompThread = nil
@@ -269,6 +265,53 @@ MainTab:Toggle({
 })
 
 --// =====================================
+--// EVOLUTION
+--// =====================================
+
+MainTab:Section({
+    name = "Evolution",
+    subtitle = "Automatic evolution controls",
+    icon = "🧬"
+})
+
+local AutoEvolve = false
+local AutoEvolveThread = nil
+
+MainTab:Toggle({
+    name = "Auto Evolve",
+    description = "Automatically evolves every 0.2 seconds",
+    default = false,
+    onText = "ACTIVE",
+    offText = "OFF",
+
+    callback = function(Value)
+        AutoEvolve = Value
+
+        if Value and not AutoEvolveThread then
+            AutoEvolveThread = task.spawn(function()
+                while AutoEvolve do
+                    local REvents =
+                        ReplicatedStorage:FindFirstChild("rEvents")
+
+                    local AutoEvolveRemote =
+                        REvents and REvents:FindFirstChild("autoEvolveRemote")
+
+                    if AutoEvolveRemote then
+                        pcall(function()
+                            AutoEvolveRemote:InvokeServer()
+                        end)
+                    end
+
+                    task.wait(0.2)
+                end
+
+                AutoEvolveThread = nil
+            end)
+        end
+    end
+})
+
+--// =====================================
 --// INFORMATION
 --// =====================================
 
@@ -280,5 +323,5 @@ MainTab:Section({
 
 MainTab:Paragraph({
     title = "Crimson Hub",
-    text = "Auto Rep, Auto Stomp, Auto Mass Rebirth, and Auto Crystal can all run independently."
+    text = "Auto Rep, Auto Stomp, Auto Mass Rebirth, Auto Crystal, and Auto Evolve can all run independently."
 })
