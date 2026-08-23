@@ -1,0 +1,476 @@
+--// CrimmyScriptz - Muscle Legends
+--// UI: MenuXD / NewGUI style
+
+getgenv().VENTURA_SKIP_EXAMPLE = true
+
+--// SERVICES
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+local Player = Players.LocalPlayer
+
+--// UI LIBRARY
+local Library = loadstring(game:HttpGet(
+    "https://raw.githubusercontent.com/DestroyTheO/MenuXD/refs/heads/main/Main"
+))()
+
+--// ICON HELPER
+local function Icon(Name)
+    if Library.Icons and Library.Icons[Name] then
+        return Library.Icons[Name]
+    end
+
+    return ""
+end
+
+--// WINDOW
+local Window = Library:new({
+    name = "CrimmyScriptz",
+    subtitle = "Muscle Legends",
+    theme = "Space",
+
+    accent =
+        (Library.Accents and (
+            Library.Accents.Starlight
+            or Library.Accents.Purple
+            or Library.Accents.Blue
+        ))
+        or nil,
+
+    watermark = "CrimmyScriptz | Muscle Legends",
+    watermarkStats = true,
+    watermarkRuntime = true,
+
+    loadingTime = 1,
+    toggleKey = Enum.KeyCode.RightControl,
+
+    responsiveScale = true,
+    reconnectOnRespawn = true,
+
+    autoLoad = false,
+    autoLoadConfig = false,
+})
+
+--========================================================
+-- STATES
+--========================================================
+
+local AutoRep = false
+local AutoRebirth = false
+local AutoEquipWeight = false
+local VoidLock = false
+
+--========================================================
+-- REMOTES
+--========================================================
+
+local MuscleEvent = Player:WaitForChild("muscleEvent")
+
+local REvents = ReplicatedStorage:WaitForChild("rEvents")
+local RebirthRemote = REvents:WaitForChild("rebirthRemote")
+
+--========================================================
+-- AUTO REP
+--========================================================
+
+task.spawn(function()
+    while true do
+        if AutoRep then
+            pcall(function()
+                MuscleEvent:FireServer("rep")
+            end)
+
+            task.wait(0.1)
+        else
+            task.wait(0.1)
+        end
+    end
+end)
+
+--========================================================
+-- AUTO REBIRTH
+--========================================================
+
+task.spawn(function()
+    while true do
+        if AutoRebirth then
+            pcall(function()
+                RebirthRemote:InvokeServer("rebirthRequest")
+            end)
+
+            task.wait(0.5)
+        else
+            task.wait(0.1)
+        end
+    end
+end)
+
+--========================================================
+-- KEEP WEIGHT EQUIPPED
+--========================================================
+
+local ToolName = "Weight"
+
+local Character = Player.Character
+local Humanoid = Character and Character:FindFirstChildOfClass("Humanoid")
+
+local function GetWeight()
+    if Character then
+        local Equipped = Character:FindFirstChild(ToolName)
+
+        if Equipped and Equipped:IsA("Tool") then
+            return Equipped
+        end
+    end
+
+    local Backpack = Player:FindFirstChild("Backpack")
+
+    if Backpack then
+        local Tool = Backpack:FindFirstChild(ToolName)
+
+        if Tool and Tool:IsA("Tool") then
+            return Tool
+        end
+    end
+
+    return nil
+end
+
+local function KeepEquipped()
+    if not AutoEquipWeight then
+        return
+    end
+
+    if not Character or not Character.Parent then
+        return
+    end
+
+    if not Humanoid or Humanoid.Health <= 0 then
+        return
+    end
+
+    -- Already equipped
+    local Equipped = Character:FindFirstChild(ToolName)
+
+    if Equipped and Equipped:IsA("Tool") then
+        return
+    end
+
+    local Tool = GetWeight()
+
+    if Tool and Tool.Parent ~= Character then
+        pcall(function()
+            Humanoid:EquipTool(Tool)
+        end)
+    end
+end
+
+--========================================================
+-- VOID PLATFORM
+--========================================================
+
+local VOID_Y = 1000
+local MAX_DISTANCE = 30
+
+local OriginalFallenPartsDestroyHeight =
+    Workspace.FallenPartsDestroyHeight
+
+local VoidPlatform
+local CreatedVoidPlatform = false
+local RootPart
+
+local function CreateVoidPlatform()
+    if VoidPlatform and VoidPlatform.Parent then
+        return VoidPlatform
+    end
+
+    VoidPlatform = Workspace:FindFirstChild("VoidPlatform")
+
+    if not VoidPlatform then
+        VoidPlatform = Instance.new("Part")
+
+        VoidPlatform.Name = "VoidPlatform"
+
+        VoidPlatform.Size = Vector3.new(
+            40,
+            2,
+            40
+        )
+
+        VoidPlatform.Anchored = true
+        VoidPlatform.CanCollide = true
+        VoidPlatform.Transparency = 0
+
+        VoidPlatform.Position = Vector3.new(
+            0,
+            VOID_Y,
+            0
+        )
+
+        VoidPlatform.Parent = Workspace
+
+        CreatedVoidPlatform = true
+    end
+
+    return VoidPlatform
+end
+
+local function TeleportToVoidPlatform()
+    if not VoidLock then
+        return
+    end
+
+    local Platform = CreateVoidPlatform()
+
+    if RootPart and RootPart.Parent and Platform then
+        RootPart.CFrame =
+            Platform.CFrame
+            * CFrame.new(0, 4, 0)
+
+        RootPart.AssemblyLinearVelocity = Vector3.zero
+        RootPart.AssemblyAngularVelocity = Vector3.zero
+    end
+end
+
+local function EnableVoidLock()
+    VoidLock = true
+
+    pcall(function()
+        Workspace.FallenPartsDestroyHeight = 0 / 0
+    end)
+
+    CreateVoidPlatform()
+
+    task.defer(TeleportToVoidPlatform)
+end
+
+local function DisableVoidLock()
+    VoidLock = false
+
+    pcall(function()
+        Workspace.FallenPartsDestroyHeight =
+            OriginalFallenPartsDestroyHeight
+    end)
+
+    if CreatedVoidPlatform then
+        if VoidPlatform then
+            VoidPlatform:Destroy()
+        end
+
+        VoidPlatform = nil
+        CreatedVoidPlatform = false
+    end
+end
+
+--========================================================
+-- CHARACTER HANDLING
+--========================================================
+
+local function SetupCharacter(NewCharacter)
+    Character = NewCharacter
+
+    Humanoid =
+        NewCharacter:WaitForChild("Humanoid")
+
+    RootPart =
+        NewCharacter:WaitForChild("HumanoidRootPart")
+
+    Player:WaitForChild("Backpack")
+
+    task.wait(0.25)
+
+    if AutoEquipWeight then
+        KeepEquipped()
+    end
+
+    if VoidLock then
+        task.wait(0.25)
+        TeleportToVoidPlatform()
+    end
+end
+
+if Player.Character then
+    task.spawn(
+        SetupCharacter,
+        Player.Character
+    )
+end
+
+Player.CharacterAdded:Connect(function(NewCharacter)
+    SetupCharacter(NewCharacter)
+end)
+
+--// Re-equip immediately if Weight is returned to Backpack
+Player:WaitForChild("Backpack").ChildAdded:Connect(function(Item)
+    if AutoEquipWeight and Item.Name == ToolName then
+        task.defer(KeepEquipped)
+    end
+end)
+
+--========================================================
+-- HEARTBEAT
+--========================================================
+
+local LastWeightCheck = 0
+
+RunService.Heartbeat:Connect(function()
+    local Now = os.clock()
+
+    --// Weight checker
+    if AutoEquipWeight then
+        if Now - LastWeightCheck >= 0.1 then
+            LastWeightCheck = Now
+
+            KeepEquipped()
+        end
+    end
+
+    --// Void lock
+    if VoidLock then
+        if RootPart
+            and RootPart.Parent
+            and VoidPlatform
+            and VoidPlatform.Parent
+        then
+            local Distance =
+                (RootPart.Position - VoidPlatform.Position).Magnitude
+
+            if Distance > MAX_DISTANCE then
+                TeleportToVoidPlatform()
+            end
+        end
+    end
+end)
+
+--========================================================
+-- UI
+--========================================================
+
+Window:NavSection("Muscle Legends")
+
+local MainTab = Window:CreateTab({
+    name = "Main",
+    icon = Icon("home"),
+})
+
+--========================================================
+-- FARMING
+--========================================================
+
+MainTab:Section({
+    name = "Farming",
+    subtitle = "Automatic strength and rebirth farming.",
+    icon = Icon("bolt"),
+})
+
+MainTab:Toggle({
+    name = "Auto Rep",
+    description = "Automatically fires a rep every 0.1 seconds.",
+    flag = "muscle.autoRep",
+    default = false,
+
+    callback = function(Value)
+        AutoRep = Value == true
+
+        if Window.Info then
+            Window:Info(
+                "Auto Rep",
+                AutoRep and "Enabled" or "Disabled",
+                2
+            )
+        end
+    end,
+})
+
+MainTab:Toggle({
+    name = "Auto Rebirth",
+    description = "Automatically requests a rebirth every 0.5 seconds.",
+    flag = "muscle.autoRebirth",
+    default = false,
+
+    callback = function(Value)
+        AutoRebirth = Value == true
+
+        if Window.Info then
+            Window:Info(
+                "Auto Rebirth",
+                AutoRebirth and "Enabled" or "Disabled",
+                2
+            )
+        end
+    end,
+})
+
+--========================================================
+-- PLAYER
+--========================================================
+
+MainTab:Section({
+    name = "Player",
+    subtitle = "Weight and character automation.",
+    icon = Icon("user"),
+})
+
+MainTab:Toggle({
+    name = "Keep Weight Equipped",
+    description = "Immediately re-equips Weight when it gets unequipped.",
+    flag = "muscle.keepWeight",
+    default = false,
+
+    callback = function(Value)
+        AutoEquipWeight = Value == true
+
+        if AutoEquipWeight then
+            task.defer(KeepEquipped)
+        end
+
+        if Window.Info then
+            Window:Info(
+                "Weight",
+                AutoEquipWeight
+                    and "Auto Equip Enabled"
+                    or "Auto Equip Disabled",
+                2
+            )
+        end
+    end,
+})
+
+--========================================================
+-- VOID
+--========================================================
+
+MainTab:Section({
+    name = "Void",
+    subtitle = "Void platform and position lock.",
+    icon = Icon("shield"),
+})
+
+MainTab:Toggle({
+    name = "Void Platform Lock",
+    description = "Creates the Y=1000 platform and keeps you within 30 studs.",
+    flag = "muscle.voidLock",
+    default = false,
+
+    callback = function(Value)
+        if Value then
+            EnableVoidLock()
+        else
+            DisableVoidLock()
+        end
+
+        if Window.Info then
+            Window:Info(
+                "Void Platform",
+                Value
+                    and "Enabled"
+                    or "Disabled",
+                2
+            )
+        end
+    end,
+})
+
+print("[CrimmyScriptz] Muscle Legends loaded.")
