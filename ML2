@@ -148,6 +148,16 @@ local SelectedEvolveFolders = {
     Unique = true,
 }
 
+local SpecificSellPetNames = {
+    "Reactor Beast",
+    "Plasma Ravager",
+}
+
+local SelectedSpecificSellPets = {
+    ["Reactor Beast"] = true,
+    ["Plasma Ravager"] = true,
+}
+
 local SellingPets = setmetatable({}, { __mode = "k" })
 
 local function ListToSet(List)
@@ -166,6 +176,20 @@ local function IsProtectedPet(Pet)
     return string.lower(Pet.Name) == "moonlight"
 end
 
+local function ShouldSellPet(Pet)
+    if not Pet or not Pet.Parent then
+        return false
+    end
+
+    if IsProtectedPet(Pet) then
+        return false
+    end
+
+    -- Sell everything in selected rarity folders OR specifically selected pet names.
+    return SelectedSellFolders[Pet.Parent.Name] == true
+        or SelectedSpecificSellPets[Pet.Name] == true
+end
+
 local function SellPet(Pet)
     if not AutoSell then
         return
@@ -175,11 +199,7 @@ local function SellPet(Pet)
         return
     end
 
-    if not SelectedSellFolders[Pet.Parent.Name] then
-        return
-    end
-
-    if IsProtectedPet(Pet) then
+    if not ShouldSellPet(Pet) then
         return
     end
 
@@ -210,19 +230,15 @@ local function ScanSellFolders()
 
     task.spawn(function()
         for _, FolderName in ipairs(PetFolderNames) do
-            if SelectedSellFolders[FolderName] then
-                local Folder = PetFolderObjects[FolderName]
+            local Folder = PetFolderObjects[FolderName]
 
-                if Folder then
-                    for _, Pet in ipairs(Folder:GetChildren()) do
-                        if not AutoSell then
-                            return
-                        end
+            if Folder then
+                for _, Pet in ipairs(Folder:GetChildren()) do
+                    if not AutoSell then
+                        return
+                    end
 
-                        if not SelectedSellFolders[FolderName] then
-                            break
-                        end
-
+                    if ShouldSellPet(Pet) then
                         SellPet(Pet)
                         task.wait(SellDelay)
                     end
@@ -238,7 +254,7 @@ for _, FolderName in ipairs(PetFolderNames) do
     Folder.ChildAdded:Connect(function(Pet)
         task.wait(0.15)
 
-        if AutoSell and SelectedSellFolders[FolderName] then
+        if AutoSell and ShouldSellPet(Pet) then
             SellPet(Pet)
         end
     end)
@@ -664,9 +680,29 @@ MainTab:MultiDropdown({
     end,
 })
 
+MainTab:MultiDropdown({
+    name = "Specific Auto Sell Pets",
+    description = "Sell these selected pet names even if their rarity folder is not selected.",
+    flag = "muscle.autoSellSpecificPets",
+    items = SpecificSellPetNames,
+    default = {
+        "Reactor Beast",
+        "Plasma Ravager",
+    },
+    placeholder = "Select pet names...",
+
+    callback = function(Values)
+        SelectedSpecificSellPets = ListToSet(Values)
+
+        if AutoSell then
+            ScanSellFolders()
+        end
+    end,
+})
+
 MainTab:Toggle({
     name = "Auto Sell",
-    description = "Sells pets only from your selected folders. Moonlight is always protected.",
+    description = "Sells pets from selected folders plus specifically selected pet names. Moonlight is always protected.",
     flag = "muscle.autoSell",
     default = false,
 
