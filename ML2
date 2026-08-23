@@ -59,6 +59,9 @@ local Window = Library:new({
 
 local AutoRep = false
 local AutoRebirth = false
+local AutoSell = false
+local AutoEvolve = false
+local AutoOpenCrystal = false
 local AutoEquipWeight = false
 local VoidLock = false
 
@@ -70,6 +73,25 @@ local MuscleEvent = Player:WaitForChild("muscleEvent")
 
 local REvents = ReplicatedStorage:WaitForChild("rEvents")
 local RebirthRemote = REvents:WaitForChild("rebirthRemote")
+local SellPetEvent = REvents:WaitForChild("sellPetEvent")
+local PetEvolveEvent = REvents:WaitForChild("petEvolveEvent")
+local OpenCrystalRemote = REvents:WaitForChild("openCrystalRemote")
+
+local PetsFolder = Player:WaitForChild("petsFolder")
+
+local PetFolderNames = {
+    "Basic",
+    "Rare",
+    "Advanced",
+    "Epic",
+    "Unique",
+}
+
+local PetFolderObjects = {}
+
+for _, FolderName in ipairs(PetFolderNames) do
+    PetFolderObjects[FolderName] = PetsFolder:WaitForChild(FolderName)
+end
 
 --========================================================
 -- AUTO REP
@@ -101,6 +123,212 @@ task.spawn(function()
             end)
 
             task.wait(0.5)
+        else
+            task.wait(0.1)
+        end
+    end
+end)
+
+
+--========================================================
+-- PET AUTOMATION
+--========================================================
+
+local SellDelay = 0.1
+local EvolveDelay = 0.5
+
+local SelectedSellFolders = {
+    Basic = true,
+    Rare = true,
+    Advanced = true,
+    Epic = true,
+}
+
+local SelectedEvolveFolders = {
+    Unique = true,
+}
+
+local SellingPets = setmetatable({}, { __mode = "k" })
+
+local function ListToSet(List)
+    local Set = {}
+
+    if type(List) == "table" then
+        for _, Value in ipairs(List) do
+            Set[Value] = true
+        end
+    end
+
+    return Set
+end
+
+local function IsProtectedPet(Pet)
+    return string.lower(Pet.Name) == "moonlight"
+end
+
+local function SellPet(Pet)
+    if not AutoSell then
+        return
+    end
+
+    if not Pet or not Pet.Parent then
+        return
+    end
+
+    if not SelectedSellFolders[Pet.Parent.Name] then
+        return
+    end
+
+    if IsProtectedPet(Pet) then
+        return
+    end
+
+    if SellingPets[Pet] then
+        return
+    end
+
+    SellingPets[Pet] = true
+
+    print("[Auto Sell]", Pet.Parent.Name, "->", Pet.Name)
+
+    pcall(function()
+        SellPetEvent:FireServer(
+            "sellPet",
+            Pet
+        )
+    end)
+
+    task.delay(0.5, function()
+        SellingPets[Pet] = nil
+    end)
+end
+
+local function ScanSellFolders()
+    if not AutoSell then
+        return
+    end
+
+    task.spawn(function()
+        for _, FolderName in ipairs(PetFolderNames) do
+            if SelectedSellFolders[FolderName] then
+                local Folder = PetFolderObjects[FolderName]
+
+                if Folder then
+                    for _, Pet in ipairs(Folder:GetChildren()) do
+                        if not AutoSell then
+                            return
+                        end
+
+                        if not SelectedSellFolders[FolderName] then
+                            break
+                        end
+
+                        SellPet(Pet)
+                        task.wait(SellDelay)
+                    end
+                end
+            end
+        end
+    end)
+end
+
+for _, FolderName in ipairs(PetFolderNames) do
+    local Folder = PetFolderObjects[FolderName]
+
+    Folder.ChildAdded:Connect(function(Pet)
+        task.wait(0.15)
+
+        if AutoSell and SelectedSellFolders[FolderName] then
+            SellPet(Pet)
+        end
+    end)
+end
+
+task.spawn(function()
+    while true do
+        if AutoEvolve then
+            local CheckedNames = {}
+
+            for _, FolderName in ipairs(PetFolderNames) do
+                if not AutoEvolve then
+                    break
+                end
+
+                if SelectedEvolveFolders[FolderName] then
+                    local Folder = PetFolderObjects[FolderName]
+
+                    if Folder then
+                        for _, Pet in ipairs(Folder:GetChildren()) do
+                            if not AutoEvolve then
+                                break
+                            end
+
+                            if not SelectedEvolveFolders[FolderName] then
+                                break
+                            end
+
+                            if not CheckedNames[Pet.Name] then
+                                CheckedNames[Pet.Name] = true
+
+                                print("[Auto Evolve]", FolderName, "->", Pet.Name)
+
+                                pcall(function()
+                                    PetEvolveEvent:FireServer(
+                                        "evolvePet",
+                                        Pet.Name
+                                    )
+                                end)
+                            end
+                        end
+                    end
+                end
+            end
+
+            task.wait(EvolveDelay)
+        else
+            task.wait(0.1)
+        end
+    end
+end)
+
+--========================================================
+-- AUTO OPEN CRYSTAL
+--========================================================
+
+local CrystalDelay = 0.5
+local CrystalBulkAmount = 3
+
+local MapCrystalsFolder = Workspace:WaitForChild("mapCrystalsFolder")
+local CrystalNames = {}
+
+local function RefreshCrystalNames()
+    table.clear(CrystalNames)
+
+    for _, Crystal in ipairs(MapCrystalsFolder:GetChildren()) do
+        table.insert(CrystalNames, Crystal.Name)
+    end
+
+    table.sort(CrystalNames)
+end
+
+RefreshCrystalNames()
+
+local CrystalName = table.find(CrystalNames, "Industrial Crystal")
+    and "Industrial Crystal"
+    or CrystalNames[1]
+
+task.spawn(function()
+    while true do
+        if AutoOpenCrystal and CrystalName then
+            pcall(function()
+                OpenCrystalRemote:InvokeServer(
+                    "openCrystalBulk",
+                    CrystalName,
+                    CrystalBulkAmount
+                )
+            end)
+
+            task.wait(CrystalDelay)
         else
             task.wait(0.1)
         end
@@ -397,6 +625,148 @@ MainTab:Toggle({
             Window:Info(
                 "Auto Rebirth",
                 AutoRebirth and "Enabled" or "Disabled",
+                2
+            )
+        end
+    end,
+})
+
+
+--========================================================
+-- PETS
+--========================================================
+
+MainTab:Section({
+    name = "Pets",
+    subtitle = "Automatic pet selling and evolving.",
+    icon = Icon("star"),
+})
+
+MainTab:MultiDropdown({
+    name = "Auto Sell Folders",
+    description = "Choose which pet folders Auto Sell can sell from.",
+    flag = "muscle.autoSellFolders",
+    items = PetFolderNames,
+    default = {
+        "Basic",
+        "Rare",
+        "Advanced",
+        "Epic",
+    },
+    placeholder = "Select folders...",
+
+    callback = function(Values)
+        SelectedSellFolders = ListToSet(Values)
+
+        if AutoSell then
+            ScanSellFolders()
+        end
+    end,
+})
+
+MainTab:Toggle({
+    name = "Auto Sell",
+    description = "Sells pets only from your selected folders. Moonlight is always protected.",
+    flag = "muscle.autoSell",
+    default = false,
+
+    callback = function(Value)
+        AutoSell = Value == true
+
+        if AutoSell then
+            ScanSellFolders()
+        end
+
+        if Window.Info then
+            Window:Info(
+                "Auto Sell",
+                AutoSell and "Enabled" or "Disabled",
+                2
+            )
+        end
+    end,
+})
+
+MainTab:MultiDropdown({
+    name = "Auto Evolve Folders",
+    description = "Choose which pet folders Auto Evolve scans.",
+    flag = "muscle.autoEvolveFolders",
+    items = PetFolderNames,
+    default = {
+        "Unique",
+    },
+    placeholder = "Select folders...",
+
+    callback = function(Values)
+        SelectedEvolveFolders = ListToSet(Values)
+    end,
+})
+
+MainTab:Toggle({
+    name = "Auto Evolve",
+    description = "Automatically evolves pet names found in your selected folders every 0.5 seconds.",
+    flag = "muscle.autoEvolve",
+    default = false,
+
+    callback = function(Value)
+        AutoEvolve = Value == true
+
+        if Window.Info then
+            Window:Info(
+                "Auto Evolve",
+                AutoEvolve and "Enabled" or "Disabled",
+                2
+            )
+        end
+    end,
+})
+
+MainTab:Dropdown({
+    name = "Crystal",
+    description = "Choose a crystal found in workspace.mapCrystalsFolder.",
+    flag = "muscle.crystalName",
+    items = CrystalNames,
+    default = CrystalName,
+    placeholder = "Select crystal...",
+
+    callback = function(Value)
+        if Value and Value ~= "" then
+            CrystalName = tostring(Value)
+        end
+    end,
+})
+
+MainTab:Dropdown({
+    name = "Crystal Open Amount",
+    description = "Choose how many of the selected crystal to open per request.",
+    flag = "muscle.crystalAmount",
+    items = {
+        1,
+        3,
+    },
+    default = 3,
+    placeholder = "Select amount...",
+
+    callback = function(Value)
+        CrystalBulkAmount = tonumber(Value) or 3
+    end,
+})
+
+MainTab:Toggle({
+    name = "Auto Open Crystal",
+    description = "Opens the selected crystal every 0.5 seconds using the selected amount.",
+    flag = "muscle.autoOpenCrystal",
+    default = false,
+
+    callback = function(Value)
+        AutoOpenCrystal = Value == true
+
+        if Window.Info then
+            Window:Info(
+                "Auto Crystal",
+                AutoOpenCrystal
+                    and ("Enabled: " .. tostring(CrystalName or "No crystal"))
+                    or "Disabled",
                 2
             )
         end
