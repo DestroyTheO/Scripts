@@ -151,11 +151,13 @@ local SelectedEvolveFolders = {
 local SpecificSellPetNames = {
     "Reactor Beast",
     "Plasma Ravager",
+    "Titan Reactor",
 }
 
 local SelectedSpecificSellPets = {
     ["Reactor Beast"] = true,
     ["Plasma Ravager"] = true,
+    ["Titan Reactor"] = true,
 }
 
 local SellingPets = setmetatable({}, { __mode = "k" })
@@ -688,6 +690,7 @@ MainTab:MultiDropdown({
     default = {
         "Reactor Beast",
         "Plasma Ravager",
+        "Titan Reactor",
     },
     placeholder = "Select pet names...",
 
