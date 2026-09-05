@@ -1,0 +1,361 @@
+-- Auto Knock -> TP -> Stomp -> Next Target
+-- Repeats automatically after players respawn
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+
+------------------------------------------------------------
+-- SETTINGS
+------------------------------------------------------------
+
+local Y_OFFSET = 1
+
+-- How often we instant-TP onto the current target
+local TELEPORT_INTERVAL = 0.1
+
+-- Don't spam KnockAll every frame
+local KNOCK_COOLDOWN = 0.75
+
+-- Stomp interval
+local STOMP_COOLDOWN = 0.1
+
+
+------------------------------------------------------------
+-- REMOTES
+------------------------------------------------------------
+
+local AdminEvent = ReplicatedStorage
+    :WaitForChild("NewAdminRemotes")
+    :WaitForChild("AdminAction")
+
+local MainEvent = ReplicatedStorage
+    :WaitForChild("MainRemotes")
+    :WaitForChild("MainRemoteEvent")
+
+
+------------------------------------------------------------
+-- PLAYER FOLDER
+------------------------------------------------------------
+
+local playersFolder = Workspace:FindFirstChild("Players")
+
+
+------------------------------------------------------------
+-- STATE
+------------------------------------------------------------
+
+local currentTarget = nil
+
+local teleportTimer = 0
+local lastKnock = 0
+local lastStomp = 0
+
+-- Used so KnockAll can fire again after a new respawn wave
+local previousAliveCount = 0
+local waitingForRespawns = false
+
+
+------------------------------------------------------------
+-- HELPERS
+------------------------------------------------------------
+
+local function getLocalRoot()
+    local character = LocalPlayer.Character
+
+    if not character then
+        return nil
+    end
+
+    return character:FindFirstChild("HumanoidRootPart")
+        or character:FindFirstChild("UpperTorso")
+        or character:FindFirstChild("Torso")
+end
+
+
+local function getTargetRoot(model)
+    if not model then
+        return nil
+    end
+
+    return model:FindFirstChild("HumanoidRootPart")
+        or model:FindFirstChild("UpperTorso")
+        or model:FindFirstChild("Torso")
+end
+
+
+local function getHumanoid(model)
+    if not model then
+        return nil
+    end
+
+    return model:FindFirstChildOfClass("Humanoid")
+end
+
+
+------------------------------------------------------------
+-- GET ALL TARGET MODELS
+------------------------------------------------------------
+
+local function getTargetModels()
+    local results = {}
+
+    -- Prefer workspace.Players like your old script
+    if playersFolder then
+        for _, model in ipairs(playersFolder:GetChildren()) do
+            if model:IsA("Model") and model.Name ~= LocalPlayer.Name then
+                table.insert(results, model)
+            end
+        end
+    else
+        -- Fallback to normal Player.Character
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character then
+                table.insert(results, player.Character)
+            end
+        end
+    end
+
+    return results
+end
+
+
+------------------------------------------------------------
+-- CHECK WHETHER TARGET CAN CURRENTLY BE ATTACKED
+------------------------------------------------------------
+
+local function isAlive(model)
+    if not model or not model.Parent then
+        return false
+    end
+
+    local humanoid = getHumanoid(model)
+    local root = getTargetRoot(model)
+
+    if not humanoid or not root then
+        return false
+    end
+
+    return humanoid.Health > 0
+end
+
+
+------------------------------------------------------------
+-- NEXT TARGET
+------------------------------------------------------------
+
+local function getNextTarget()
+    for _, model in ipairs(getTargetModels()) do
+        if model ~= currentTarget and isAlive(model) then
+
+            -- Same logic as your previous script:
+            -- ignore somebody already marked Stomped
+            if model:GetAttribute("Stomped") ~= true then
+                return model
+            end
+        end
+    end
+
+    return nil
+end
+
+
+------------------------------------------------------------
+-- COUNT ALIVE PLAYERS
+------------------------------------------------------------
+
+local function getAliveStats()
+    local targets = getTargetModels()
+
+    local total = #targets
+    local alive = 0
+
+    for _, model in ipairs(targets) do
+        if isAlive(model) then
+            alive += 1
+        end
+    end
+
+    return alive, total
+end
+
+
+------------------------------------------------------------
+-- KNOCK ALL
+------------------------------------------------------------
+
+local function knockAll()
+    if os.clock() - lastKnock < KNOCK_COOLDOWN then
+        return
+    end
+
+    lastKnock = os.clock()
+
+    pcall(function()
+        AdminEvent:FireServer(
+            "KnockAll",
+            {}
+        )
+    end)
+end
+
+
+------------------------------------------------------------
+-- STOMP
+------------------------------------------------------------
+
+local function stomp()
+    if os.clock() - lastStomp < STOMP_COOLDOWN then
+        return
+    end
+
+    lastStomp = os.clock()
+
+    pcall(function()
+        MainEvent:FireServer(
+            "Stomp"
+        )
+    end)
+end
+
+
+------------------------------------------------------------
+-- MAIN LOOP
+------------------------------------------------------------
+
+RunService.Heartbeat:Connect(function(dt)
+
+    --------------------------------------------------------
+    -- Detect death / respawn waves
+    --------------------------------------------------------
+
+    local aliveCount, totalCount = getAliveStats()
+
+    if aliveCount < previousAliveCount then
+        -- Somebody died
+        waitingForRespawns = true
+    end
+
+    -- Everyone is alive again
+    if waitingForRespawns
+        and totalCount > 0
+        and aliveCount == totalCount
+    then
+        waitingForRespawns = false
+
+        -- Reset current target so the whole cycle starts again
+        currentTarget = nil
+        teleportTimer = 0
+
+        knockAll()
+
+        print("[AutoKill] Everyone respawned -> KnockAll -> restarting")
+    end
+
+    previousAliveCount = aliveCount
+
+
+    --------------------------------------------------------
+    -- Find target
+    --------------------------------------------------------
+
+    if not currentTarget then
+        currentTarget = getNextTarget()
+        teleportTimer = 0
+
+        if not currentTarget then
+            return
+        end
+
+        print("[AutoKill] Target:", currentTarget.Name)
+    end
+
+
+    --------------------------------------------------------
+    -- Target disappeared
+    --------------------------------------------------------
+
+    if not currentTarget.Parent then
+        currentTarget = nil
+        teleportTimer = 0
+        return
+    end
+
+
+    --------------------------------------------------------
+    -- Target finished / stomped
+    --------------------------------------------------------
+
+    if currentTarget:GetAttribute("Stomped") == true then
+        print("[AutoKill] Finished:", currentTarget.Name)
+
+        currentTarget = nil
+        teleportTimer = 0
+        return
+    end
+
+
+    --------------------------------------------------------
+    -- Target died
+    --------------------------------------------------------
+
+    local targetHumanoid = getHumanoid(currentTarget)
+
+    if not targetHumanoid or targetHumanoid.Health <= 0 then
+        currentTarget = nil
+        teleportTimer = 0
+        return
+    end
+
+
+    --------------------------------------------------------
+    -- TP + KNOCK + STOMP
+    --------------------------------------------------------
+
+    teleportTimer += dt
+
+    if teleportTimer < TELEPORT_INTERVAL then
+        return
+    end
+
+    teleportTimer = 0
+
+
+    local root = getLocalRoot()
+    local targetRoot = getTargetRoot(currentTarget)
+
+    if not root or not targetRoot then
+        return
+    end
+
+
+    --------------------------------------------------------
+    -- INSTANT TELEPORT
+    -- Keeps your current rotation like your old script
+    --------------------------------------------------------
+
+    local rx, ry, rz = root.CFrame:ToEulerAnglesXYZ()
+
+    root.CFrame =
+        CFrame.new(
+            targetRoot.Position + Vector3.new(0, Y_OFFSET, 0)
+        )
+        * CFrame.Angles(rx, ry, rz)
+
+
+    --------------------------------------------------------
+    -- KnockAll
+    --------------------------------------------------------
+
+    knockAll()
+
+
+    --------------------------------------------------------
+    -- Stomp
+    --------------------------------------------------------
+
+    stomp()
+end)
