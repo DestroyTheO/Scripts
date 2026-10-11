@@ -1562,10 +1562,10 @@ local cmds = {
     "unview",
 }
 
---// COMMAND BAR V6 (beta v1.0.6)
--- Compact bottom command bar. Tap the logo to open commands;
--- hold it for 0.65s to hide the bar. Tap again to restore.
--- Suggestions and the searchable list use the existing command handlers.
+--// COMMAND BAR V7 (beta v1.0.6)
+-- Compact bottom launcher, hold-to-hide, searchable separate commands list.
+-- V7 adds history, match highlighting, command hints, status markers and mobile layout.
+-- The original command implementations are unchanged.
 local TweenService = gets("TweenService")
 local playerGui = localp:WaitForChild("PlayerGui")
 local oldUI = playerGui:FindFirstChild("CommandBar")
@@ -1580,6 +1580,7 @@ local C = {
     sub = Color3.fromRGB(157, 160, 166),
     muted = Color3.fromRGB(109, 113, 120),
     accent = Color3.fromRGB(196, 200, 210),
+    enabled = Color3.fromRGB(121, 205, 156),
 }
 local function new(className, props, parent)
     local obj = Instance.new(className)
@@ -1750,6 +1751,22 @@ new("UIPadding", {
     PaddingLeft=UDim.new(0,3), PaddingRight=UDim.new(0,7),
 }, results)
 
+-- A small live ON marker appears only next to currently active commands.
+-- These state accessors read the original script flags; no background UI polling.
+local trackedStates = {
+    noclip=function() return noclipbool end,
+    infstamina=function() return infstambool end,
+    autorespawn=function() return autorebool end,
+    autoguns=function() return autogbool end,
+    infjump=function() return infjumpbool end,
+    loopkill=function() return loopkill end,
+    esp=function() return espbool end,
+    silentaim=function() return silentAimEnabled end,
+    boost=function() return boosting == true end,
+    ignorecd=function() return ignore end,
+    antitase=function() return antitasebool end,
+    view=function() return viewconn ~= nil end,
+}
 local rows = {}
 for i, command in ipairs(catalog) do
     local row = new("TextButton", {
@@ -1765,12 +1782,32 @@ for i, command in ipairs(catalog) do
     local desc=text(row,command.description,UDim2.fromOffset(11,24),
         UDim2.new(1,-24,0,18),11,C.sub)
     desc.ZIndex=13
+    if trackedStates[command.name] then
+        desc.Size=UDim2.new(1,-85,0,18)
+    end
+    local onMark=text(row,"●  ON",UDim2.new(1,-61,0,26),UDim2.fromOffset(49,16),
+        10,C.enabled,true)
+    onMark.TextXAlignment=Enum.TextXAlignment.Right
+    onMark.ZIndex=13
+    onMark.Visible=false
     local alias=#command.aliases>0 and ("/ "..table.concat(command.aliases,", ")) or ""
     local aliasLabel=text(row,alias,UDim2.new(.57,0,0,4),UDim2.new(.4,-16,0,20),11,C.muted)
     aliasLabel.TextXAlignment=Enum.TextXAlignment.Right
     aliasLabel.ZIndex=13
     addHover(row,C.background,C.rowHover)
-    table.insert(rows,{frame=row,data=command})
+    table.insert(rows,{frame=row,data=command,marker=onMark})
+end
+
+local function refreshIndicators()
+    for _, item in ipairs(rows) do
+        local check=trackedStates[item.data.name]
+        if check then
+            local ok, enabled=pcall(check)
+            item.marker.Visible=ok and enabled==true
+        else
+            item.marker.Visible=false
+        end
+    end
 end
 
 local empty = text(menu,"No matching commands.",UDim2.fromOffset(160,287),
@@ -1794,9 +1831,14 @@ help.ZIndex=12
 -- Bar:    0.112,70 / 1,-84 (compact width x 48)
 -- Tune BAR_WIDTH if you want a different desktop width (pixels).
 local BAR_WIDTH = 390
+local dockButtonX = UDim.new(.112,0)
+local dockBarX = UDim.new(.112,70)
+local dockBottom = 84
+local keyboardUp = false
+local suggestionsCapacity = 5
 local function getBarWidth(screenWidth)
-    -- On phones leave 16px after the bar instead of extending off-screen.
-    return math.min(BAR_WIDTH, math.max(150, screenWidth - screenWidth * .112 - 86))
+    local barX=screenWidth*dockBarX.Scale+dockBarX.Offset
+    return math.min(BAR_WIDTH, math.max(130,screenWidth-barX-14))
 end
 -- A restrained, compact launcher with the original logo.
 local btn = new("TextButton", {
@@ -1807,6 +1849,7 @@ local btn = new("TextButton", {
 },gui)
 corner(btn,12)
 local btnStroke=border(btn,.32)
+local launcherScale=new("UIScale",{Scale=1},btn)
 local btnTopEdge=new("Frame",{
     Name="Edge",Position=UDim2.fromOffset(11,1),Size=UDim2.new(1,-22,0,1),
     BackgroundColor3=Color3.fromRGB(209,213,222),BackgroundTransparency=.81,
@@ -1841,15 +1884,18 @@ local buttonHint=new("TextLabel",{
 corner(buttonHint,6)
 border(buttonHint,.52)
 local btnHovered=false
+local pressingButton=false
 btn.MouseEnter:Connect(function()
     btnHovered=true
     buttonHint.Visible=true
+    if not pressingButton then animate(launcherScale,{Scale=1.04},.12) end
     animate(btn,{BackgroundColor3=Color3.fromRGB(44,47,53)},.12)
     animate(btnStroke,{Transparency=.02},.12)
 end)
 btn.MouseLeave:Connect(function()
     btnHovered=false
     buttonHint.Visible=false
+    if not pressingButton then animate(launcherScale,{Scale=1},.14) end
     animate(btn,{BackgroundColor3=Color3.fromRGB(30,32,37)},.14)
     animate(btnStroke,{Transparency=.32},.14)
 end)
@@ -1923,6 +1969,13 @@ sendButton.InputEnded:Connect(function(event)
 end)
 bar:GetPropertyChangedSignal("Text"):Connect(updateSendVisual)
 
+-- Context hints live below the input, keeping the command text itself untouched.
+local argHint=text(gui,"",UDim2.new(.112,70,1,-33),UDim2.fromOffset(BAR_WIDTH,17),
+    11,C.sub)
+argHint.ZIndex=21
+argHint.Visible=false
+argHint.Font=Enum.Font.Gotham
+
 -- Suggestions are a simple dropdown, not a second dashboard.
 local maxSuggestions=5
 local suggestOptions={}
@@ -1960,6 +2013,7 @@ local barHidden=false
 local function setMenuOpen(open)
     if open and barHidden then return end
     isMenuOpen=open
+    if open then refreshIndicators() end
     menu.Visible=open
     menuCaret.Text=open and "⌃" or "⌄"
     suggestPanel.Visible=false
@@ -1973,6 +2027,7 @@ local function setBarHidden(hidden)
     setMenuOpen(false)
     suggestPanel.Visible=false
     dismissedSuggestions=true
+    argHint.Visible=false
     if hidden and bar:IsFocused() then bar:ReleaseFocus() end
     inputSurface.Visible=not hidden
     menuIcon.Position=UDim2.new(hidden and .5 or .41,0,.5,0)
@@ -1980,6 +2035,7 @@ local function setBarHidden(hidden)
     menuCaret.Text="⌄"
     buttonHint.Text=hidden and "Click to show command bar" or "Click: commands   ·   Hold: hide"
     animate(btn,{Size=hidden and UDim2.fromOffset(48,48) or UDim2.fromOffset(58,48)},.17)
+    animate(launcherScale,{Scale=1},.15)
     if not hidden then
         inputScale.Scale=.97
         animate(inputScale,{Scale=1},.17)
@@ -2023,7 +2079,6 @@ close.Activated:Connect(function() setMenuOpen(false) end)
 -- Keep the launcher visible as a restore button; prevent release from also opening the list.
 local HOLD_SECONDS=.65
 local pressGeneration=0
-local pressingButton=false
 local heldInput=nil
 local longPressFired=false
 local function finishButtonPress(event)
@@ -2035,11 +2090,13 @@ local function finishButtonPress(event)
     heldInput=nil
     pressGeneration+=1
     animate(holdProgress,{Size=UDim2.fromOffset(0,2)},.1)
+    animate(launcherScale,{Scale=btnHovered and 1.03 or 1},.13)
 end
 btn.InputBegan:Connect(function(event)
     if event.UserInputType~=Enum.UserInputType.MouseButton1 and event.UserInputType~=Enum.UserInputType.Touch then return end
     if pressingButton then return end
     pressingButton=true
+    animate(launcherScale,{Scale=.95},.11)
     heldInput=event
     longPressFired=false
     pressGeneration+=1
@@ -2058,6 +2115,10 @@ btn.InputEnded:Connect(finishButtonPress)
 input.InputEnded:Connect(finishButtonPress) -- handles release outside the launcher
 btn.Activated:Connect(function()
     if longPressFired then return end
+    animate(launcherScale,{Scale=1.045},.10)
+    task.delay(.10,function()
+        if btn.Parent then animate(launcherScale,{Scale=1},.13) end
+    end)
     if barHidden then
         setBarHidden(false)
     else
@@ -2094,135 +2155,202 @@ input.InputChanged:Connect(function(event)
         startPosition.Y.Scale,startPosition.Y.Offset+diff.Y/k)
 end)
 
--- Matching, alias, player name and number completions.
+-- History: last 20 executed commands (most recent first).
+local commandHistory={}
+local historyCursor=nil
+local historyDraft=""
+local expectedHistoryText=nil
+local function pushHistory(commandText)
+    local value=(commandText or ""):match("^%s*(.-)%s*$") or ""
+    if value=="" then return end
+    if commandHistory[1]~=value then
+        table.insert(commandHistory,1,value)
+        while #commandHistory>20 do table.remove(commandHistory) end
+    end
+    historyCursor=nil
+    historyDraft=""
+    expectedHistoryText=nil
+end
+local function navigateHistory(direction)
+    if #commandHistory==0 then return end
+    if historyCursor==nil then
+        if direction<0 then return end
+        historyDraft=bar.Text
+        historyCursor=1
+    else
+        historyCursor=historyCursor+direction
+        if historyCursor<1 then
+            historyCursor=nil
+            expectedHistoryText=historyDraft
+            bar.Text=historyDraft
+            bar.CursorPosition=#bar.Text+1
+            return
+        end
+        historyCursor=math.min(#commandHistory,historyCursor)
+    end
+    expectedHistoryText=commandHistory[historyCursor]
+    bar.Text=expectedHistoryText
+    bar.CursorPosition=#bar.Text+1
+end
+
 local function trim(v)
     return (v or ""):match("^%s*(.-)%s*$") or ""
 end
 local function parseInput(textValue)
-    -- Preserve trailing whitespace: "goto " and "speed " reveal argument suggestions.
-    local textInput=(textValue or ""):lower():match("^%s*(.*)$") or ""
-    local prefix=textInput:match("^([:;!?/%.])") or ""
-    if prefix~="" then
-        textInput=textInput:sub(2):match("^%s*(.*)$") or ""
-    end
-    local first, rest=textInput:match("^(%S+)%s*(.*)$")
-    local hasArg=first~=nil and textInput:find("%s")~=nil
-    return prefix, first or "", trim(rest), hasArg
+    local txt=(textValue or ""):lower():match("^%s*(.*)$") or ""
+    local pfx=txt:match("^([:;!?/%.])") or ""
+    if pfx~="" then txt=txt:sub(2):match("^%s*(.*)$") or "" end
+    local verb,rest=txt:match("^(%S+)%s*(.*)$")
+    local hasArg=verb~=nil and txt:find("%s")~=nil
+    return pfx,verb or "",trim(rest),hasArg
+end
+
+-- Roblox's RichText supports highlighting without editing the actual input.
+local function escapeRich(value)
+    return tostring(value or ""):gsub("&","&amp;"):gsub("<","&lt;")
+        :gsub(">","&gt;"):gsub('"',"&quot;")
+end
+local function highlightMatch(label,query)
+    local value=tostring(label or "")
+    if not query or query=="" then return escapeRich(value) end
+    local a,b=value:lower():find(query:lower(),1,true)
+    if not a then return escapeRich(value) end
+    return escapeRich(value:sub(1,a-1))
+        ..'<font color="#9FDFC0"><b>'..escapeRich(value:sub(a,b))..'</b></font>'
+        ..escapeRich(value:sub(b+1))
 end
 local function getSuggestions(textValue)
-    local prefix, verb, arg, hasArg=parseInput(textValue)
+    local pfx,verb,arg,hasArg=parseInput(textValue)
     if verb=="" then return {} end
     local entry=cmdIndex[verb]
-    local list={}
+    local options={}
     if hasArg and entry and entry.arg=="player" then
-        local found={}
-        for _, player in ipairs(players:GetPlayers()) do
+        for _,player in ipairs(players:GetPlayers()) do
             if player~=localp then
-                local name=player.Name:lower()
+                local username=player.Name:lower()
                 local display=player.DisplayName:lower()
                 local score
                 if arg=="" then score=10
-                elseif name==arg or display==arg then score=0
-                elseif name:sub(1,#arg)==arg then score=1
+                elseif username==arg or display==arg then score=0
+                elseif username:sub(1,#arg)==arg then score=1
                 elseif display:sub(1,#arg)==arg then score=2
-                elseif name:find(arg,1,true) then score=3
-                elseif display:find(arg,1,true) then score=4 end
+                elseif username:find(arg,1,true) then score=4
+                elseif display:find(arg,1,true) then score=5 end
                 if score then
-                    table.insert(found,{score=score,label=player.DisplayName,detail="@"..player.Name,
-                        badge="PLAYER",value=prefix..verb.." "..player.Name})
+                    table.insert(options,{score=score,label=player.DisplayName,
+                        detail="@"..player.Name,badge="PLAYER",value=pfx..verb.." "..player.Name,
+                        match=arg})
                 end
             end
         end
-        table.sort(found,function(a,b)
-            if a.score==b.score then return a.label:lower()<b.label:lower() end
-            return a.score<b.score
-        end)
-        for i=1,math.min(maxSuggestions,#found) do table.insert(list,found[i]) end
-        return list
-    end
-    if hasArg and entry and entry.arg=="number" then
-        local numbers
-        if entry.name=="walkspeed" then
-            numbers={16,24,32,50,75}
-        elseif entry.name=="jumpheight" then
-            numbers={5.5,10,20,30,50}
-        elseif entry.name=="fov" then
-            numbers={60,70,80,90,100}
-        else
-            numbers={10,25,50,75,100}
-        end
-        for _, number in ipairs(numbers) do
+    elseif hasArg and entry and entry.arg=="number" then
+        local presets={
+            walkspeed={16,24,32,50,75}, jumpheight={5.5,10,20,30,50},
+            fov={60,70,80,90,100},
+        }
+        for _,number in ipairs(presets[entry.name] or {10,25,50,75,100}) do
             local formatted=tostring(number)
             if arg=="" or formatted:sub(1,#arg)==arg then
-                table.insert(list,{score=10,label=verb.." "..formatted,
-                    detail="Use "..formatted.." as the "..entry.arg,badge="VALUE",
-                    value=prefix..verb.." "..formatted})
+                table.insert(options,{score=0,label=verb.." "..formatted,
+                    detail="Set "..entry.arg.." to "..formatted,badge="VALUE",
+                    value=pfx..verb.." "..formatted,match=arg})
             end
         end
-        return list
-    end
-    if hasArg then return {} end
-    for _, c in ipairs(catalog) do
-        local score=100
-        local matchingAlias=nil
-        if c.name==verb then score=0
-        elseif c.name:sub(1,#verb)==verb then score=1
-        elseif c.name:find(verb,1,true) then score=5 end
-        for _, alias in ipairs(c.aliases) do
-            if alias==verb and score>0 then score=0; matchingAlias=alias
-            elseif alias:sub(1,#verb)==verb and score>2 then score=2; matchingAlias=alias
-            elseif alias:find(verb,1,true) and score>6 then score=6; matchingAlias=alias end
-        end
-        if score<100 then
-            local target=c.name
-            local displayName=c.name..(c.arg and "  <"..c.arg..">" or "")
-            table.insert(list,{
-                score=score, label=displayName,
-                detail=c.description, badge=matchingAlias and ("/"..matchingAlias) or c.category:upper(),
-                value=prefix..target..(c.arg and " " or ""),
-            })
+    elseif not hasArg then
+        for _,c in ipairs(catalog) do
+            local score=100
+            local bestAlias=nil
+            if c.name==verb then score=0
+            elseif c.name:sub(1,#verb)==verb then score=1
+            elseif c.name:find(verb,1,true) then score=4 end
+            for _,alias in ipairs(c.aliases) do
+                if alias==verb and score>0 then score=0;bestAlias=alias
+                elseif alias:sub(1,#verb)==verb and score>2 then score=2;bestAlias=alias
+                elseif alias:find(verb,1,true) and score>6 then score=6;bestAlias=alias end
+            end
+            if score<100 then
+                table.insert(options,{score=score,label=c.name,
+                    detail=c.description,badge=bestAlias and ("/"..bestAlias) or
+                        (c.arg and "<"..c.arg..">" or c.category:upper()),
+                    value=pfx..c.name..(c.arg and " " or ""),match=verb,
+                })
+            end
         end
     end
-    table.sort(list,function(a,b)
-        if a.score==b.score then return a.label<b.label end
+    table.sort(options,function(a,b)
+        if a.score==b.score then return a.label:lower()<b.label:lower() end
         return a.score<b.score
     end)
-    while #list>maxSuggestions do table.remove(list) end
-    return list
+    while #options>maxSuggestions do table.remove(options) end
+    return options
 end
 
 local function redrawSuggestions()
-    local visible=#suggestOptions>0 and bar:IsFocused() and not isMenuOpen and not dismissedSuggestions
+    local shown=math.min(#suggestOptions,suggestionsCapacity)
+    local visible=shown>0 and bar:IsFocused() and not isMenuOpen
+        and not dismissedSuggestions and not barHidden
     suggestPanel.Visible=visible
     if not visible then return end
-    focusedIndex=math.clamp(focusedIndex,1,#suggestOptions)
-    local panelHeight=8+#suggestOptions*43
-    -- Dropdown is always the same width as the command bar.
-    local viewport=workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize
-    local width=viewport and getBarWidth(viewport.X) or BAR_WIDTH
-    suggestPanel.Size=UDim2.fromOffset(width,panelHeight)
-    -- Suggestions rise directly above the original bottom command bar.
-    suggestPanel.Position=UDim2.new(.112,70,1,-84-panelHeight-8)
-    for i,entry in ipairs(suggestRows) do
-        local option=suggestOptions[i]
-        entry.frame.Visible=option~=nil
+    focusedIndex=math.clamp(focusedIndex,1,shown)
+    local height=8+shown*43
+    suggestPanel.Size=UDim2.fromOffset(inputSurface.Size.X.Offset,height)
+    local pos=inputSurface.Position
+    suggestPanel.Position=UDim2.new(pos.X.Scale,pos.X.Offset,
+        pos.Y.Scale,pos.Y.Offset-height-8)
+    for i,widget in ipairs(suggestRows) do
+        local option=i<=shown and suggestOptions[i] or nil
+        widget.frame.Visible=option~=nil
         if option then
-            entry.name.Text=option.label
-            entry.detail.Text=option.detail
-            entry.shortcut.Text=option.badge
-            entry.frame.BackgroundColor3=i==focusedIndex and C.rowHover or C.surface
+            widget.name.RichText=true
+            widget.name.Text=highlightMatch(option.label,option.match)
+            widget.detail.RichText=true
+            widget.detail.Text=highlightMatch(option.detail,option.match)
+            widget.shortcut.Text=option.badge
+            widget.frame.BackgroundColor3=i==focusedIndex and C.rowHover or C.surface
         end
     end
 end
+
+local function updateArgumentHint()
+    if barHidden then
+        argHint.Visible=false
+        return
+    end
+    if bar.Text=="" then
+        argHint.Text="↑/↓ history  ·  Tab autocomplete  ·  Enter to run"
+        argHint.Visible=bar:IsFocused() and not keyboardUp
+        return
+    end
+    local _,verb,arg,hasArg=parseInput(bar.Text)
+    local entry=cmdIndex[verb]
+    local hint
+    if entry and entry.arg=="player" then
+        hint=hasArg and arg~="" and ("Target: "..arg.."  ·  Tab to complete")
+            or "Requires a player name  ·  Tab to complete"
+    elseif entry and entry.arg=="number" then
+        hint=hasArg and arg~="" and ("Value: "..arg.."  ·  Enter to run")
+            or "Requires a number  ·  Tab for suggestions"
+    elseif entry then
+        hint="Enter to run  ·  Tab to complete  ·  ↑/↓ history"
+    else
+        hint="Tab to complete  ·  ↑/↓ history"
+    end
+    argHint.Text=hint
+    argHint.Visible=not keyboardUp
+end
+
 local function refreshSuggestions()
     dismissedSuggestions=false
     suggestOptions=getSuggestions(bar.Text)
     focusedIndex=1
     redrawSuggestions()
+    updateArgumentHint()
 end
 local function acceptSuggestion(index)
     local option=suggestOptions[index or focusedIndex]
     if not option then return false end
+    historyCursor=nil
+    expectedHistoryText=nil
     bar.Text=option.value
     bar:CaptureFocus()
     task.defer(function()
@@ -2230,34 +2358,70 @@ local function acceptSuggestion(index)
     end)
     return true
 end
-for i,entry in ipairs(suggestRows) do
-    entry.frame.Activated:Connect(function()
-        acceptSuggestion(i)
-    end)
+for i,widget in ipairs(suggestRows) do
+    widget.frame.Activated:Connect(function() acceptSuggestion(i) end)
 end
-bar:GetPropertyChangedSignal("Text"):Connect(refreshSuggestions)
+bar:GetPropertyChangedSignal("Text"):Connect(function()
+    if historyCursor and bar.Text~=expectedHistoryText then
+        historyCursor=nil
+        expectedHistoryText=nil
+    end
+    refreshSuggestions()
+end)
 bar.Focused:Connect(function()
-    inputStroke.Transparency=.12
+    animate(inputStroke,{Transparency=.08},.12)
     refreshSuggestions()
 end)
 bar.FocusLost:Connect(function(enterPressed)
-    inputStroke.Transparency=.5
+    animate(inputStroke,{Transparency=.5},.12)
     if enterPressed then return end
     task.delay(.13,function()
         if not bar:IsFocused() then suggestPanel.Visible=false end
     end)
 end)
 
+-- Layout adapts to narrow screens and, where supported, the on-screen keyboard.
 local viewportConnection
 local function updateViewport()
     local camera=workspace.CurrentCamera
     if not camera then return end
     local view=camera.ViewportSize
-    local nextScale=math.min(1,(view.X-22)/612,(view.Y-116)/514)
-    menuScale.Scale=math.max(.45,nextScale)
+    local isNarrow=view.X<600
+    local menuRatio=math.min(1,(view.X-22)/612,(view.Y-110)/514)
+    menuScale.Scale=math.max(.42,menuRatio)
+    dockButtonX=isNarrow and UDim.new(0,12) or UDim.new(.112,0)
+    dockBarX=isNarrow and UDim.new(0,68) or UDim.new(.112,70)
+    dockBottom=84
+    keyboardUp=false
+    if input.TouchEnabled then
+        local ok,visible=pcall(function() return input.OnScreenKeyboardVisible end)
+        if ok and visible then
+            keyboardUp=true
+            local okPos,keyPos=pcall(function() return input.OnScreenKeyboardPosition end)
+            local okSize,keySize=pcall(function() return input.OnScreenKeyboardSize end)
+            local top=okPos and keyPos and keyPos.Y or 0
+            if top<=0 or top>=view.Y then
+                top=view.Y-(okSize and keySize and keySize.Y or 0)
+            end
+            if top>75 and top<view.Y then
+                -- Keep the bottom edge of the input just above the mobile keyboard.
+                dockBottom=math.max(84,view.Y-top+58)
+            end
+        end
+    end
+    btn.Position=UDim2.new(dockButtonX.Scale,dockButtonX.Offset,1,-dockBottom)
+    inputSurface.Position=UDim2.new(dockBarX.Scale,dockBarX.Offset,1,-dockBottom)
     local width=getBarWidth(view.X)
     inputSurface.Size=UDim2.fromOffset(width,48)
-    suggestPanel.Size=UDim2.fromOffset(width,suggestPanel.Size.Y.Offset)
+    sendButton.Size=UDim2.fromOffset(isNarrow and 40 or 37,isNarrow and 40 or 37)
+    buttonHint.Position=UDim2.new(dockButtonX.Scale,dockButtonX.Offset,1,-dockBottom-33)
+    argHint.Position=UDim2.new(dockBarX.Scale,dockBarX.Offset,1,-dockBottom+51)
+    argHint.Size=UDim2.fromOffset(width,17)
+    argHint.Visible=argHint.Visible and not keyboardUp
+    local barTop=view.Y-dockBottom
+    suggestionsCapacity=math.clamp(math.floor((barTop-18)/43),1,maxSuggestions)
+    redrawSuggestions()
+    updateArgumentHint()
 end
 local function bindViewport()
     if viewportConnection then viewportConnection:Disconnect() end
@@ -2268,12 +2432,18 @@ local function bindViewport()
     updateViewport()
 end
 workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(bindViewport)
+for _,propertyName in ipairs({"OnScreenKeyboardVisible","OnScreenKeyboardPosition","OnScreenKeyboardSize"}) do
+    pcall(function()
+        input:GetPropertyChangedSignal(propertyName):Connect(updateViewport)
+    end)
+end
 bindViewport()
 
-input.InputBegan:Connect(function(event, processed)
+input.InputBegan:Connect(function(event,processed)
     if event.UserInputType~=Enum.UserInputType.Keyboard then return end
     local key=event.KeyCode
-    local ctrl=input:IsKeyDown(Enum.KeyCode.LeftControl) or input:IsKeyDown(Enum.KeyCode.RightControl)
+    local ctrl=input:IsKeyDown(Enum.KeyCode.LeftControl)
+        or input:IsKeyDown(Enum.KeyCode.RightControl)
     if key==Enum.KeyCode.K and ctrl then
         if barHidden then setBarHidden(false) end
         setMenuOpen(false)
@@ -2281,12 +2451,18 @@ input.InputBegan:Connect(function(event, processed)
         return
     end
     if bar:IsFocused() then
-        if key==Enum.KeyCode.Down and #suggestOptions>0 then
-            focusedIndex=focusedIndex%#suggestOptions+1
-            redrawSuggestions()
-        elseif key==Enum.KeyCode.Up and #suggestOptions>0 then
-            focusedIndex=(focusedIndex-2+#suggestOptions)%#suggestOptions+1
-            redrawSuggestions()
+        -- Normal arrows recall history. Ctrl+arrows selects autocomplete rows.
+        if ctrl and (key==Enum.KeyCode.Down or key==Enum.KeyCode.Up) then
+            local shown=math.min(#suggestOptions,suggestionsCapacity)
+            if shown>0 then
+                focusedIndex=key==Enum.KeyCode.Down and focusedIndex%shown+1
+                    or (focusedIndex-2+shown)%shown+1
+                redrawSuggestions()
+            end
+        elseif key==Enum.KeyCode.Up then
+            navigateHistory(1)
+        elseif key==Enum.KeyCode.Down then
+            navigateHistory(-1)
         elseif key==Enum.KeyCode.Tab and #suggestOptions>0 then
             acceptSuggestion(focusedIndex)
         elseif key==Enum.KeyCode.Escape then
@@ -2352,6 +2528,10 @@ local function runcommand(msg, frombar)
     local cmd, arg = msg:match("^(%S+)%s*(.-)$")
     if not cmd then
         return
+    end
+    local entry=cmdIndex[cmd]
+    if entry and (not entry.arg or arg~="") then
+        pushHistory(msg)
     end
 
     if cmd == "cmds" then
@@ -2474,6 +2654,9 @@ local function runcommand(msg, frombar)
             workspace.CurrentCamera.FieldOfView = n
         end
     end
+    -- Update status markers after the command; spawned loops may start on the next frame.
+    refreshIndicators()
+    task.defer(refreshIndicators)
 end
 
 localp.Chatted:Connect(function(msg)
@@ -2484,6 +2667,11 @@ local function submitCommand()
     local msg = bar.Text:match("^%s*(.-)%s*$")
     if not msg or msg == "" then return end
     bar.Text = ""
+    argHint.Visible=false
+    animate(sendScale,{Scale=.91},.07)
+    task.delay(.10,function()
+        if sendButton.Parent then animate(sendScale,{Scale=1},.13) end
+    end)
     runcommand(msg, true)
 end
 
@@ -2503,4 +2691,3 @@ task.spawn(function()
     end)
     antikick()
 end)
-
